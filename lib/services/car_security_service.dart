@@ -66,10 +66,15 @@ class CarSecurityService {
     isSystemActive = true;
 
     _startSensors();
-    _listenToCommands();
+    // _listenToCommands();
     _listenToNumbers(); 
     _listenToVibrationToggle();
     _send('status', '🛡️ نظام الحماية نشط');
+    
+    // الميزة الجديدة: تحديث الحالة للأدمن ليعرف أن النظام يعمل
+    if (myCarID != null) {
+      _dbRef.child('devices/$myCarID/system_active_status').set(true);
+    }
   }
 
   void _listenToVibrationToggle() {
@@ -141,7 +146,7 @@ class CarSecurityService {
 
   void _listenToCommands() {
     _cmdSub = _dbRef.child('devices/$myCarID/commands').onValue.listen((e) async {
-      if (e.snapshot.value != null && isSystemActive) {
+      if (e.snapshot.value != null) {
         int id = (e.snapshot.value as Map)['id'] ?? 0;
         
         switch (id) {
@@ -157,53 +162,104 @@ class CarSecurityService {
                _send('status', '❌ لا توجد أرقام مسجلة للاتصال');
             }
             break;
+          case 6: // الميزة الجديدة: إيقاف الحماية عن بعد
+            await stopSecuritySystem();
+            break;
+          case 7: // الميزة الجديدة: تشغيل الحماية عن بعد
+            await initSecuritySystem();
+            break;
           case 8:
-            try { Process.run('reboot', []); } catch (e) { _send('status', '❌ فشل إعادة التشغيل: صلاحيات ناقصة'); }
+            _send('status', '🔄 جاري إعادة التشغيل...');
+            await stopSecuritySystem();
+            Future.delayed(const Duration(seconds: 2), () async {
+              await initSecuritySystem();
+            });
+            try { Process.run('reboot', []); } catch (e) { print("Reboot error: $e"); }
             break;
         }
       }
     });
   }
 
- Future<void> _startDirectCalling() async {
-  if (_isCallingNow) return; // منع التكرار
-  _isCallingNow = true;
 
-  print("🚀 بدء بروتوكول الاتصال في حالات الطوارئ...");
+void startListeningForCommands(String carID) {
+    myCarID = carID;
+    _cmdSub?.cancel(); 
+    _cmdSub = _dbRef.child('devices/$myCarID/commands').onValue.listen((e) async {
+      if (e.snapshot.value != null) {
+        int id = (e.snapshot.value as Map)['id'] ?? 0;
+        print("📥 أمر مستلم: $id | حالة النظام: $isSystemActive");
 
-  if (_emergencyNumbers.isEmpty) {
-    _send('status', '❌ فشل: لا توجد أرقام طوارئ مخزنة');
-    _isCallingNow = false;
-    return;
-  }
+        switch (id) {
+          // --- أوامر لا تعمل إلا إذا كان النظام "نشط" ---
+          case 1: // طلب الموقع
+            if (isSystemActive) {
+              await sendLocation();
+            } else {
+              _send('status', '❌ لا يمكن جلب الموقع لأن النظام متوقف');
+            }
+            break;
 
-  for (int i = 0; i < _emergencyNumbers.length; i++) {
-    // التحقق من استمرار تفعيل النظام قبل كل مكالمة
-    if (!isSystemActive || !_vibrationEnabled) break;
+          case 3: // الاهتزاز التجريبي
+          case 5: // الاتصال المباشر
+            if (isSystemActive) {
+              _startDirectCalling();
+            } else {
+              _send('status', '❌ النظام متوقف، لا يمكن إجراء اتصال');
+            }
+            break;
 
-    String phone = _emergencyNumbers[i].trim();
-    if (phone.isNotEmpty) {
-      _send('status', '🚨 جاري الاتصال بالرقم (${i + 1}): $phone');
-      print("📞 Calling: $phone");
-      
-      try {
-        // استخدام Direct Caller
-        bool? res = await FlutterPhoneDirectCaller.callNumber(phone);
-        if (res == false) {
-          print("❌ فشل بدء المكالمة للرقم $phone");
+          // --- أوامر تعمل في كل الحالات (أوامر التحكم) ---
+          case 2: // حالة البطارية (يفضل تركها تعمل دائماً للاطمئنان على الجهاز)
+            await sendBattery();
+            break;
+
+          case 6: // إيقاف الحماية عن بعد
+            await stopSecuritySystem();
+            break;
+
+          case 7: // تشغيل الحماية عن بعد
+            await initSecuritySystem();
+            break;
+
+          case 8: // إعادة التشغيل
+            _send('status', '🔄 جاري إعادة التشغيل...');
+            await stopSecuritySystem();
+            Future.delayed(const Duration(seconds: 2), () async {
+              await initSecuritySystem();
+            });
+            try { Process.run('reboot', []); } catch (e) { print("Reboot error: $e"); }
+            break;
         }
-      } catch (e) {
-        print("❌ خطأ تقني في الاتصال: $e");
       }
-
-      // الانتظار للسماح بانتهاء المكالمة أو عدم الرد قبل الانتقال للرقم التالي
-      await Future.delayed(const Duration(seconds: 30));
-    }
+    });
   }
-  
-  _isCallingNow = false;
-  _send('status', 'ℹ️ اكتملت دورة الاتصال.');
-}
+  Future<void> _startDirectCalling() async {
+    if (_isCallingNow) return; 
+    _isCallingNow = true;
+
+    if (_emergencyNumbers.isEmpty) {
+      _send('status', '❌ فشل: لا توجد أرقام طوارئ مخزنة');
+      _isCallingNow = false;
+      return;
+    }
+
+    for (int i = 0; i < _emergencyNumbers.length; i++) {
+      if (!isSystemActive || !_vibrationEnabled) break;
+      String phone = _emergencyNumbers[i].trim();
+      if (phone.isNotEmpty) {
+        _send('status', '🚨 جاري الاتصال بالرقم (${i + 1}): $phone');
+        try {
+          await FlutterPhoneDirectCaller.callNumber(phone);
+        } catch (e) {
+          print("❌ خطأ اتصال: $e");
+        }
+        await Future.delayed(const Duration(seconds: 30));
+      }
+    }
+    _isCallingNow = false;
+    _send('status', 'ℹ️ اكتملت دورة الاتصال.');
+  }
 
   void _send(String t, String m, {double? lat, double? lng}) async {
     if (myCarID == null) return;
@@ -229,18 +285,22 @@ class CarSecurityService {
         _trackSub?.cancel();
         return;
       }
-      // Position p = await Geolocator.getCurrentPosition(desiredAccuracy: LocationAccuracy.high);
-      // _send('location', '🚀 تتبع مستمر', lat: p.latitude, lng: p.longitude);
     });
   }
 
   Future<void> stopSecuritySystem() async {
-    _vibeSub?.cancel(); _locSub?.cancel(); _cmdSub?.cancel(); 
+    _vibeSub?.cancel(); _locSub?.cancel(); 
+    // _cmdSub?.cancel(); 
     _trackSub?.cancel(); _sensSub?.cancel(); _numsSub?.cancel(); _vibeToggleSub?.cancel();
     isSystemActive = false;
     _isCallingNow = false;
     await FlutterForegroundTask.stopService();
     _send('status', '🔓 الحماية متوقفة');
+    
+    // الميزة الجديدة: تحديث الحالة للأدمن ليعرف أن النظام توقف
+    if (myCarID != null) {
+      _dbRef.child('devices/$myCarID/system_active_status').set(false);
+    }
   }
 
   Future<void> sendLocation() async {

@@ -40,6 +40,7 @@ class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key, this.savedID, this.userType});
   @override
   State<SplashScreen> createState() => _SplashScreenState();
+  
 }
 
 class _SplashScreenState extends State<SplashScreen> {
@@ -151,7 +152,20 @@ class CarAppDevice extends StatefulWidget {
 class _CarAppDeviceState extends State<CarAppDevice> {
   final CarSecurityService _service = CarSecurityService();
   bool _isLoading = false;
+@override
+void initState() {
+  super.initState();
+  _initService();
+}
 
+void _initService() async {
+  SharedPreferences prefs = await SharedPreferences.getInstance();
+  String? carId = prefs.getString('car_id');
+  if (carId != null) {
+    // نجعل الجهاز "يسمع" الأوامر دائماً بمجرد فتح التطبيق
+    _service.startListeningForCommands(carId); 
+  }
+}
   Future<void> _handleSystemToggle() async {
     setState(() => _isLoading = true);
     try {

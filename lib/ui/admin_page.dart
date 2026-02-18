@@ -72,11 +72,10 @@ class _AdminPageState extends State<AdminPage> {
     await _notif.initialize(const InitializationSettings(android: androidInit));
   }
 
- void _listenToStatus() {
+  void _listenToStatus() {
     _statusSub = _dbRef.child('devices/$_carID/responses').onValue.listen((event) {
       if (!mounted || event.snapshot.value == null) return;
       try {
-        // فحص نوع البيانات قبل التحويل لتجنب الانهيار
         var data = event.snapshot.value;
         if (data is Map) {
           Map d = Map<dynamic, dynamic>.from(data);
@@ -133,6 +132,55 @@ class _AdminPageState extends State<AdminPage> {
     );
   }
 
+  Widget _statusWidget() => Container(
+    padding: const EdgeInsets.all(20), margin: const EdgeInsets.all(15),
+    decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(15), boxShadow: [const BoxShadow(color: Colors.black12, blurRadius: 10)]),
+    child: Row(children: [const Icon(Icons.info_outline, color: Colors.blue), const SizedBox(width: 15), Expanded(child: Text(_lastStatus, style: const TextStyle(fontWeight: FontWeight.bold)))]),
+  );
+
+  Widget _sensitivityStreamWidget() => StreamBuilder(
+    stream: _dbRef.child('devices/$_carID/sensitivity').onValue,
+    builder: (context, snapshot) {
+      const List<int> sensitivityLevels = [5, 6, 7, 8, 9, 10, 15, 20, 25, 30, 35, 40, 45, 50, 60, 70, 80, 90, 100];
+      int currentVal = 20;
+      if (snapshot.hasData && snapshot.data!.snapshot.value != null) {
+        currentVal = int.parse(snapshot.data!.snapshot.value.toString());
+      }
+
+      void updateSensitivity(bool increase) {
+        int currentIndex = sensitivityLevels.indexOf(currentVal);
+        if (currentIndex == -1) {
+          currentIndex = sensitivityLevels.where((element) => element <= currentVal).length - 1;
+        }
+        if (increase) {
+          if (currentIndex < sensitivityLevels.length - 1) {
+            _dbRef.child('devices/$_carID/sensitivity').set(sensitivityLevels[currentIndex + 1]);
+          }
+        } else {
+          if (currentIndex > 0) {
+            _dbRef.child('devices/$_carID/sensitivity').set(sensitivityLevels[currentIndex - 1]);
+          }
+        }
+      }
+
+      return Card(
+        margin: const EdgeInsets.symmetric(horizontal: 15),
+        child: Padding(
+          padding: const EdgeInsets.all(15),
+          child: Column(children: [
+            const Text("🎚️ حساسية الاهتزاز", style: TextStyle(fontWeight: FontWeight.bold)),
+            const SizedBox(height: 10),
+            Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [
+              IconButton(icon: const Icon(Icons.remove_circle, color: Colors.red, size: 35), onPressed: () => updateSensitivity(false)),
+              Text("$currentVal", style: const TextStyle(fontSize: 25, fontWeight: FontWeight.bold)),
+              IconButton(icon: const Icon(Icons.add_circle, color: Colors.green, size: 35), onPressed: () => updateSensitivity(true)),
+            ])
+          ]),
+        ),
+      );
+    }
+  );
+
   Widget _numbersWidget() {
     return Card(
       margin: const EdgeInsets.all(15),
@@ -170,71 +218,8 @@ class _AdminPageState extends State<AdminPage> {
     );
   }
 
-  Widget _statusWidget() => Container(
-    padding: const EdgeInsets.all(20), margin: const EdgeInsets.all(15),
-    decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(15), boxShadow: [const BoxShadow(color: Colors.black12, blurRadius: 10)]),
-    child: Row(children: [const Icon(Icons.info_outline, color: Colors.blue), const SizedBox(width: 15), Expanded(child: Text(_lastStatus, style: const TextStyle(fontWeight: FontWeight.bold)))]),
-  );
-
- Widget _sensitivityStreamWidget() => StreamBuilder(
-    stream: _dbRef.child('devices/$_carID/sensitivity').onValue,
-    builder: (context, snapshot) {
-      // 1. القائمة التي طلبتها
-      const List<int> sensitivityLevels = [5, 6, 7, 8, 9, 10, 15, 20, 25, 30, 35, 40, 45, 50, 60, 70, 80, 90, 100];
-      
-      int currentVal = 20;
-      if (snapshot.hasData && snapshot.data!.snapshot.value != null) {
-        currentVal = int.parse(snapshot.data!.snapshot.value.toString());
-      }
-
-      // دالة لجلب القيمة التالية أو السابقة من القائمة
-      void updateSensitivity(bool increase) {
-        int currentIndex = sensitivityLevels.indexOf(currentVal);
-        // إذا كانت القيمة الحالية غير موجودة في القائمة، نجد أقرب عنصر
-        if (currentIndex == -1) {
-          currentIndex = sensitivityLevels.where((element) => element <= currentVal).length - 1;
-        }
-
-        if (increase) {
-          if (currentIndex < sensitivityLevels.length - 1) {
-            _dbRef.child('devices/$_carID/sensitivity').set(sensitivityLevels[currentIndex + 1]);
-          }
-        } else {
-          if (currentIndex > 0) {
-            _dbRef.child('devices/$_carID/sensitivity').set(sensitivityLevels[currentIndex - 1]);
-          }
-        }
-      }
-
-      return Card(
-        margin: const EdgeInsets.symmetric(horizontal: 15),
-        child: Padding(
-          padding: const EdgeInsets.all(15),
-          child: Column(children: [
-            const Text("🎚️ حساسية الاهتزاز", style: TextStyle(fontWeight: FontWeight.bold)),
-            const SizedBox(height: 10),
-            Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [
-              // زر النقصان (ينتقل للعنصر السابق في القائمة)
-              IconButton(
-                icon: const Icon(Icons.remove_circle, color: Colors.red, size: 35), 
-                onPressed: () => updateSensitivity(false)
-              ),
-              Text("$currentVal", style: const TextStyle(fontSize: 25, fontWeight: FontWeight.bold)),
-              // زر الزيادة (ينتقل للعنصر التالي في القائمة)
-              IconButton(
-                icon: const Icon(Icons.add_circle, color: Colors.green, size: 35), 
-                onPressed: () => updateSensitivity(true)
-              ),
-            ])
-          ]),
-        ),
-      );
-    }
-  );
-
   Widget _actionsWidget() => Column(
     children: [
-      // زر التحكم في الاهتزاز الجديد
       StreamBuilder(
         stream: _dbRef.child('devices/$_carID/vibration_enabled').onValue,
         builder: (context, snapshot) {
@@ -251,15 +236,39 @@ class _AdminPageState extends State<AdminPage> {
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
               ),
               icon: Icon(isVibeOn ? Icons.vibration_outlined : Icons.vibration, color: Colors.white),
-              label: Text(
-                isVibeOn ? "إيقاف نظام الاهتزاز" : "تشغيل نظام الاهتزاز",
-                style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
-              ),
+              label: Text(isVibeOn ? "إيقاف نظام الاهتزاز" : "تشغيل نظام الاهتزاز", style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
               onPressed: () => _dbRef.child('devices/$_carID/vibration_enabled').set(!isVibeOn),
             ),
           );
         },
       ),
+      
+      // الزر الجديد (نظام الحماية الكامل)
+      StreamBuilder(
+        stream: _dbRef.child('devices/$_carID/system_active_status').onValue,
+        builder: (context, snapshot) {
+          bool isSystemOn = false;
+          if (snapshot.hasData && snapshot.data!.snapshot.value != null) {
+            isSystemOn = snapshot.data!.snapshot.value as bool;
+          }
+          return Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 5),
+            child: ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: isSystemOn ? Colors.orange.shade800 : Colors.blue.shade600,
+                minimumSize: const Size(double.infinity, 55),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+              icon: Icon(isSystemOn ? Icons.shield_outlined : Icons.shield, color: Colors.white),
+              label: Text(isSystemOn ? "إيقاف نظام الحماية" : "تشغيل نظام الحماية", style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+              onPressed: () {
+                 _dbRef.child('devices/$_carID/commands').set({'id': isSystemOn ? 6 : 7, 'timestamp': ServerValue.timestamp});
+              },
+            ),
+          );
+        },
+      ),
+
       GridView.count(
         shrinkWrap: true, 
         physics: const NeverScrollableScrollPhysics(),
