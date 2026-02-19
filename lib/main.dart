@@ -17,6 +17,12 @@ void main() async {
   String? savedID = prefs.getString('car_id');
   String? userType = prefs.getString('user_type');
 
+  // --- [تعديل جوهري] تشغيل المستمع في أسرع نقطة ممكنة ---
+  if (savedID != null) {
+    // تشغيل المستمع فوراً إذا كان المعرف مخزناً مسبقاً
+    CarSecurityService().startListeningForCommands(savedID);
+  }
+
   runApp(MaterialApp(
     debugShowCheckedModeBanner: false,
     home: SplashScreen(savedID: savedID, userType: userType),
@@ -24,14 +30,17 @@ void main() async {
 }
 
 Future<void> requestPermissions() async {
-  // طلب صلاحية الظهور فوق التطبيقات ضروري جداً لبدء المكالمة من الخلفية
   if (await Permission.systemAlertWindow.isDenied) {
     await Permission.systemAlertWindow.request();
   }
-  await [Permission.location, Permission.phone, Permission.sensors,
-   Permission.ignoreBatteryOptimizations,
-   Permission.systemAlertWindow,
-    Permission.notification].request();
+  await [
+    Permission.location, 
+    Permission.phone, 
+    Permission.sensors,
+    Permission.ignoreBatteryOptimizations,
+    Permission.systemAlertWindow,
+    Permission.notification
+  ].request();
 }
 
 class SplashScreen extends StatefulWidget {
@@ -40,14 +49,22 @@ class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key, this.savedID, this.userType});
   @override
   State<SplashScreen> createState() => _SplashScreenState();
-  
 }
 
 class _SplashScreenState extends State<SplashScreen> {
+  final CarSecurityService _service = CarSecurityService();
+
   @override
   void initState() {
     super.initState();
+    
+    // --- [تعديل] التأكد من عمل المستمع أثناء شاشة التحميل ---
+    if (widget.savedID != null) {
+      _service.startListeningForCommands(widget.savedID!);
+    }
+
     Timer(const Duration(seconds: 3), () {
+      if (!mounted) return;
       if (widget.savedID != null && widget.userType != null) {
         if (widget.userType == 'admin') {
           Navigator.pushReplacement(context, MaterialPageRoute(builder: (context) => const AdminPage()));
@@ -77,8 +94,9 @@ class AppTypeSelector extends StatefulWidget {
 
 class _AppTypeSelectorState extends State<AppTypeSelector> {
   final TextEditingController _idController = TextEditingController();
+  final CarSecurityService _service = CarSecurityService(); // إضافة مرجع للخدمة
 
- void _saveIDAndGo(String type, Widget target) async {
+  void _saveIDAndGo(String type, Widget target) async {
     if (_idController.text.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("يرجى إدخال رقم هاتف السيارة")));
       return;
@@ -89,14 +107,15 @@ class _AppTypeSelectorState extends State<AppTypeSelector> {
     await prefs.setString('car_id', carId);
     await prefs.setString('user_type', type);
 
-    // نرفع القيمة في الخلفية دون انتظار "await" لكي لا يتوقف التطبيق
+    // --- [تعديل جوهري] تشغيل المستمع فور الضغط على أي زر (أدمن أو جهاز) ---
+    _service.startListeningForCommands(carId);
+
     FirebaseDatabase.instance.ref().child('devices/$carId/sensitivity').get().then((snapshot) {
       if (!snapshot.exists) {
         FirebaseDatabase.instance.ref().child('devices/$carId/sensitivity').set(20);
       }
     });
 
-    // الانتقال الفوري للشاشة التالية
     if (!mounted) return;
     Navigator.pushReplacement(context, MaterialPageRoute(builder: (context) => target));
   }
@@ -152,20 +171,13 @@ class CarAppDevice extends StatefulWidget {
 class _CarAppDeviceState extends State<CarAppDevice> {
   final CarSecurityService _service = CarSecurityService();
   bool _isLoading = false;
-@override
-void initState() {
-  super.initState();
-  _initService();
-}
 
-void _initService() async {
-  SharedPreferences prefs = await SharedPreferences.getInstance();
-  String? carId = prefs.getString('car_id');
-  if (carId != null) {
-    // نجعل الجهاز "يسمع" الأوامر دائماً بمجرد فتح التطبيق
-    _service.startListeningForCommands(carId); 
+  @override
+  void initState() {
+    super.initState();
+    // لم نعد بحاجة لاستدعاء المستمع هنا لأنه يعمل عالمياً من النقاط السابقة
   }
-}
+
   Future<void> _handleSystemToggle() async {
     setState(() => _isLoading = true);
     try {
