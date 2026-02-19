@@ -220,10 +220,10 @@ class _AdminPageState extends State<AdminPage> {
 
   Widget _actionsWidget() => Column(
     children: [
-      StreamBuilder(
+     StreamBuilder(
         stream: _dbRef.child('devices/$_carID/vibration_enabled').onValue,
-        builder: (context, snapshot) {
-          bool isVibeOn = true; 
+        builder: (context, AsyncSnapshot<DatabaseEvent> snapshot) {
+          bool isVibeOn = true; // القيمة الافتراضية
           if (snapshot.hasData && snapshot.data!.snapshot.value != null) {
             isVibeOn = snapshot.data!.snapshot.value as bool;
           }
@@ -236,33 +236,52 @@ class _AdminPageState extends State<AdminPage> {
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
               ),
               icon: Icon(isVibeOn ? Icons.vibration_outlined : Icons.vibration, color: Colors.white),
-              label: Text(isVibeOn ? "إيقاف نظام الاهتزاز" : "تشغيل نظام الاهتزاز", style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+              label: Text(
+                isVibeOn ? "إيقاف نظام الاهتزاز" : "تشغيل نظام الاهتزاز", 
+                style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)
+              ),
               onPressed: () => _dbRef.child('devices/$_carID/vibration_enabled').set(!isVibeOn),
             ),
           );
         },
       ),
       
-      // الزر الجديد (نظام الحماية الكامل)
+
+     // الزر الجديد (نظام الحماية الكامل) - معدل لإصلاح مشكلة اللون
       StreamBuilder(
         stream: _dbRef.child('devices/$_carID/system_active_status').onValue,
-        builder: (context, snapshot) {
+        builder: (context, AsyncSnapshot<DatabaseEvent> snapshot) {
           bool isSystemOn = false;
+          
+          // التأكد من وجود بيانات وتحديث الحالة بناءً عليها
           if (snapshot.hasData && snapshot.data!.snapshot.value != null) {
             isSystemOn = snapshot.data!.snapshot.value as bool;
           }
+
           return Padding(
             padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 5),
             child: ElevatedButton.icon(
               style: ElevatedButton.styleFrom(
+                // استخدام AnimatedContainer ضمني أو تغيير اللون بناءً على القيمة اللحظية
                 backgroundColor: isSystemOn ? Colors.orange.shade800 : Colors.blue.shade600,
                 minimumSize: const Size(double.infinity, 55),
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                elevation: isSystemOn ? 8 : 2, // إضافة تأثير ظل عند التفعيل
               ),
               icon: Icon(isSystemOn ? Icons.shield_outlined : Icons.shield, color: Colors.white),
-              label: Text(isSystemOn ? "إيقاف نظام الحماية" : "تشغيل نظام الحماية", style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+              label: Text(
+                isSystemOn ? "إيقاف نظام الحماية" : "تشغيل نظام الحماية", 
+                style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)
+              ),
               onPressed: () {
-                 _dbRef.child('devices/$_carID/commands').set({'id': isSystemOn ? 6 : 7, 'timestamp': ServerValue.timestamp});
+                // إرسال الأمر وتحديث الحالة فوراً في قاعدة البيانات
+                int commandId = isSystemOn ? 6 : 7;
+                _dbRef.child('devices/$_carID/commands').set({
+                  'id': commandId, 
+                  'timestamp': ServerValue.timestamp
+                });
+                
+                // ملاحظة: لا نغير اللون يدوياً هنا، الـ StreamBuilder سيتكفل بذلك فور تحديث Firebase
               },
             ),
           );

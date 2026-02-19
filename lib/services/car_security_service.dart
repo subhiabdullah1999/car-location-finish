@@ -17,7 +17,7 @@ class CarSecurityService {
   StreamSubscription? _vibeSub, _locSub, _cmdSub, _trackSub, _sensSub, _numsSub, _vibeToggleSub;
   bool isSystemActive = false;
   bool _vibrationEnabled = true;
-  bool _isCallingNow = false; // لمنع تداخل العمليات
+  bool _isCallingNow = false; 
   String? myCarID;
   double? sLat, sLng;
   double _threshold = 20.0;
@@ -48,53 +48,49 @@ class CarSecurityService {
     );
   }
 
- Future<void> initSecuritySystem() async {
-  // 1. منع التشغيل المكرر إذا كان النظام يعمل بالفعل
-  if (isSystemActive) return;
+  Future<void> initSecuritySystem() async {
+    if (isSystemActive) return;
 
-  try {
-    // 2. تفعيل المهمة في الخلفية فوراً (Foreground Service)
-    initForegroundTask();
-    await FlutterForegroundTask.startService(
-      notificationTitle: '🛡️ نظام حماية HASBA نشط',
-      notificationText: 'جاري مراقبة السيارة وحمايتها الآن...',
-    );
+    try {
+      initForegroundTask();
+      await FlutterForegroundTask.startService(
+        notificationTitle: '🛡️ نظام حماية HASBA نشط',
+        notificationText: 'جاري مراقبة السيارة وحمايتها الآن...',
+      );
 
-    // 3. تحديث الهوية وجلب الموقع المرجعي للسيارة (أهم خطوة للأمان)
-    SharedPreferences prefs = await SharedPreferences.getInstance();
-    myCarID = prefs.getString('car_id');
+      SharedPreferences prefs = await SharedPreferences.getInstance();
+      myCarID = prefs.getString('car_id');
 
-    // محاولة جلب آخر موقع معروف لسرعة الاستجابة، ثم جلب الموقع الدقيق
-    Position? p = await Geolocator.getLastKnownPosition();
-    p ??= await Geolocator.getCurrentPosition(desiredAccuracy: LocationAccuracy.high);
+      Position? p = await Geolocator.getLastKnownPosition();
+      p ??= await Geolocator.getCurrentPosition(desiredAccuracy: LocationAccuracy.high);
 
-    sLat = p.latitude; 
-    sLng = p.longitude;
+      sLat = p.latitude; 
+      sLng = p.longitude;
 
-    // 4. رفع "راية" أن النظام أصبح نشطاً داخلياً وفي قاعدة البيانات
-    isSystemActive = true;
-    if (myCarID != null) {
-      await _dbRef.child('devices/$myCarID/system_active_status').set(true);
-      // حفظ الحالة محلياً ليتم تذكرها عند إعادة تشغيل التطبيق
-      await prefs.setBool('was_system_active', true);
+      isSystemActive = true;
+      
+      if (myCarID != null) {
+        // تحديث الحالة فوراً ليتمكن الأدمن من رؤية اللون البرتقالي
+        await _dbRef.child('devices/$myCarID/system_active_status').set(true);
+        await prefs.setBool('was_system_active', true);
+      }
+
+      _startSensors();          
+      _listenToNumbers();       
+      _listenToVibrationToggle(); 
+
+      _send('status', '🛡️ تم تفعيل نظام الحماية بنجاح والموقع المرجعي مؤمن');
+      print("✅ [Security System] تم التفعيل بنجاح للمعرف: $myCarID");
+
+    } catch (e) {
+      print("❌ [Security System] فشل في التفعيل: $e");
+      isSystemActive = false; 
+      if (myCarID != null) {
+        await _dbRef.child('devices/$myCarID/system_active_status').set(false);
+      }
+      _send('status', '⚠️ فشل في تفعيل النظام تلقائياً');
     }
-
-    // 5. تشغيل "محركات" المراقبة (الحساسات والمستمعات الفرعية)
-    _startSensors();          // بدء مراقبة الاهتزاز والموقع
-    _listenToNumbers();       // تحديث أرقام الطوارئ في حال تغييرها
-    _listenToVibrationToggle(); // مراقبة هل الأدمن سمح بالاهتزاز أم لا
-
-    // 6. إرسال تأكيد للأدمن بأن المهمة تمت بنجاح
-    _send('status', '🛡️ تم تفعيل نظام الحماية بنجاح والموقع المرجعي مؤمن');
-    
-    print("✅ [Security System] تم التفعيل بنجاح للمعرف: $myCarID");
-
-  } catch (e) {
-    print("❌ [Security System] فشل في التفعيل: $e");
-    isSystemActive = false; // إعادة الحالة في حال الفشل
-    _send('status', '⚠️ فشل في تفعيل النظام تلقائياً');
   }
-}
 
   void _listenToVibrationToggle() {
     if (myCarID == null) return;
@@ -123,7 +119,6 @@ class CarSecurityService {
             }
           }
           _emergencyNumbers = tempNumbers.where((e) => e.isNotEmpty).toList();
-          print("✅ الأرقام المحدثة: $_emergencyNumbers");
         } catch (e) {
           print("❌ خطأ في تنسيق الأرقام: $e");
         }
@@ -163,105 +158,68 @@ class CarSecurityService {
     });
   }
 
-  void _listenToCommands() {
+  // تم دمج المنطق المحدث هنا لضمان استجابة الأوامر وتغيير الألوان
+  void startListeningForCommands(String carID) {
+    myCarID = carID;
+    _cmdSub?.cancel(); 
+    
     _cmdSub = _dbRef.child('devices/$myCarID/commands').onValue.listen((e) async {
       if (e.snapshot.value != null) {
-        int id = (e.snapshot.value as Map)['id'] ?? 0;
+        var data = e.snapshot.value as Map;
+        int id = data['id'] ?? 0;
         
+        print("📥 أمر مستلم: $id | الحالة: $isSystemActive");
+
         switch (id) {
-          case 1: await sendLocation(); break;
-          case 2: await sendBattery(); break;
-          case 3: _startDirectCalling(); break; 
-          case 4: _send('status', '🔄 جاري إعادة ضبط النظام...'); break; 
-          case 5:
-            _send('status', '📞 طلب اتصال مباشر بالرقم الأول...');
-            if (_emergencyNumbers.isNotEmpty) {
-               await FlutterPhoneDirectCaller.callNumber(_emergencyNumbers[0]);
+          case 7: // تشغيل الحماية
+            if (!isSystemActive) {
+              await initSecuritySystem();
             } else {
-               _send('status', '❌ لا توجد أرقام مسجلة للاتصال');
+              _send('status', '🛡️ النظام نشط بالفعل');
             }
             break;
-          case 6: // الميزة الجديدة: إيقاف الحماية عن بعد
-            await stopSecuritySystem();
+
+          case 6: // إيقاف الحماية
+            if (isSystemActive) {
+              await stopSecuritySystem();
+            } else {
+              _send('status', '🔓 النظام متوقف بالفعل');
+            }
             break;
-          case 7: // الميزة الجديدة: تشغيل الحماية عن بعد
+
+          case 1: // الموقع
+            if (isSystemActive) {
+              await sendLocation();
+            } else {
+              _send('status', '❌ النظام متوقف، تعذر جلب الموقع');
+            }
+            break;
+
+          case 2: // البطارية
+            await sendBattery();
+            break;
+
+          case 3: 
+          case 5: // اتصال
+            if (isSystemActive) {
+              _startDirectCalling();
+            } else {
+              _send('status', '❌ النظام متوقف، تعذر الاتصال');
+            }
+            break;
+
+          case 8: // إعادة التشغيل البرمجية (الحل الاحترافي)
+            _send('status', '🔄 جاري تصفير الحساسات وإعادة التشغيل...');
+            await stopSecuritySystem();
+            await Future.delayed(const Duration(seconds: 3));
             await initSecuritySystem();
-            break;
-          case 8:
-            _send('status', '🔄 جاري إعادة التشغيل...');
-            await stopSecuritySystem();
-            Future.delayed(const Duration(seconds: 2), () async {
-              await initSecuritySystem();
-            });
-            try { Process.run('reboot', []); } catch (e) { print("Reboot error: $e"); }
+            _send('status', '✅ تمت إعادة التشغيل بنجاح؛ النظام الآن نشط');
             break;
         }
       }
     });
   }
 
-
-void startListeningForCommands(String carID) {
-  myCarID = carID;
-  _cmdSub?.cancel(); // منع التكرار
-  
-  _cmdSub = _dbRef.child('devices/$myCarID/commands').onValue.listen((e) async {
-    if (e.snapshot.value != null) {
-      var data = e.snapshot.value as Map;
-      int id = data['id'] ?? 0;
-      
-      // طباعة للتأكد من وصول الأمر
-      print("📥 أمر مستلم: $id | الحالة الحالية للنظام: $isSystemActive");
-
-      switch (id) {
-        case 7: // تشغيل الحماية عن بعد
-          if (!isSystemActive) {
-            print("🚀 جاري تفعيل النظام عن بعد...");
-            await initSecuritySystem();
-          } else {
-            _send('status', '🛡️ النظام نشط بالفعل');
-          }
-          break;
-
-        case 6: // إيقاف الحماية عن بعد
-          if (isSystemActive) {
-            print("🛑 جاري إيقاف النظام عن بعد...");
-            await stopSecuritySystem();
-          } else {
-            _send('status', '🔓 النظام متوقف بالفعل');
-          }
-          break;
-
-        case 1: // طلب الموقع
-          if (isSystemActive) {
-            await sendLocation();
-          } else {
-            _send('status', '❌ النظام متوقف، تعذر جلب الموقع');
-          }
-          break;
-
-        case 2: // حالة البطارية
-          await sendBattery();
-          break;
-
-        case 3: 
-        case 5: // اتصال
-          if (isSystemActive) {
-            _startDirectCalling();
-          } else {
-            _send('status', '❌ النظام متوقف، تعذر الاتصال');
-          }
-          break;
-
-        case 8: // إعادة التشغيل
-          _send('status', '🔄 إعادة تشغيل كاملة...');
-          await stopSecuritySystem();
-          Future.delayed(const Duration(seconds: 2), () => initSecuritySystem());
-          break;
-      }
-    }
-  });
-}
   Future<void> _startDirectCalling() async {
     if (_isCallingNow) return; 
     _isCallingNow = true;
@@ -317,18 +275,28 @@ void startListeningForCommands(String carID) {
   }
 
   Future<void> stopSecuritySystem() async {
-    _vibeSub?.cancel(); _locSub?.cancel(); 
-    // _cmdSub?.cancel(); 
-    _trackSub?.cancel(); _sensSub?.cancel(); _numsSub?.cancel(); _vibeToggleSub?.cancel();
+    _vibeSub?.cancel(); 
+    _locSub?.cancel(); 
+    _trackSub?.cancel(); 
+    _sensSub?.cancel(); 
+    _numsSub?.cancel(); 
+    _vibeToggleSub?.cancel();
+    
     isSystemActive = false;
     _isCallingNow = false;
+    sLat = null; 
+    sLng = null;
+
     await FlutterForegroundTask.stopService();
-    _send('status', '🔓 الحماية متوقفة');
     
-    // الميزة الجديدة: تحديث الحالة للأدمن ليعرف أن النظام توقف
     if (myCarID != null) {
-      _dbRef.child('devices/$myCarID/system_active_status').set(false);
+      // تحديث الحالة فوراً ليتمكن الأدمن من رؤية اللون الأزرق
+      await _dbRef.child('devices/$myCarID/system_active_status').set(false);
+      SharedPreferences prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('was_system_active', false);
     }
+    
+    _send('status', '🔓 تم إيقاف النظام وتنظيف الذاكرة');
   }
 
   Future<void> sendLocation() async {
