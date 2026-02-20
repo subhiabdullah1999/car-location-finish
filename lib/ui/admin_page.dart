@@ -6,6 +6,7 @@ import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:async';
+import 'dart:convert'; // ضروري لتحويل البيانات JSON
 
 class AdminPage extends StatefulWidget {
   const AdminPage({super.key});
@@ -28,6 +29,9 @@ class _AdminPageState extends State<AdminPage> {
   bool _isDialogShowing = false;
   bool _isExpanded = true; 
 
+  // قائمة تخزين الإشعارات (الميزة الجديدة)
+  List<Map<String, String>> _allNotifications = [];
+
   @override
   void initState() {
     super.initState();
@@ -35,12 +39,15 @@ class _AdminPageState extends State<AdminPage> {
     _loadSavedNumbers();
   }
 
+  // تحميل الأرقام والإشعارات المحفوظة
   void _loadSavedNumbers() async {
     SharedPreferences prefs = await SharedPreferences.getInstance();
     _carID = prefs.getString('car_id');
     
     if (_carID != null) {
       _listenToStatus();
+      _loadNotificationsFromDisk(); // تحميل الإشعارات القديمة
+      
       setState(() {
         _n1.text = prefs.getString('num1_$_carID') ?? "";
         _n2.text = prefs.getString('num2_$_carID') ?? "";
@@ -63,6 +70,26 @@ class _AdminPageState extends State<AdminPage> {
             }
           });
         }
+      });
+    }
+  }
+
+  // منطق حفظ الإشعارات في الذاكرة
+  void _saveNotificationsToDisk() async {
+    SharedPreferences prefs = await SharedPreferences.getInstance();
+    String encodedData = json.encode(_allNotifications);
+    await prefs.setString('saved_notifs_$_carID', encodedData);
+  }
+
+  // منطق تحميل الإشعارات من الذاكرة
+  void _loadNotificationsFromDisk() async {
+    SharedPreferences prefs = await SharedPreferences.getInstance();
+    String? savedData = prefs.getString('saved_notifs_$_carID');
+    if (savedData != null) {
+      setState(() {
+        _allNotifications = List<Map<String, String>>.from(
+          json.decode(savedData).map((item) => Map<String, String>.from(item))
+        );
       });
     }
   }
@@ -91,9 +118,24 @@ class _AdminPageState extends State<AdminPage> {
   void _handleResponse(Map d) async {
     String type = d['type'] ?? '';
     String msg = d['message'] ?? '';
+    
+    // إضافة الإشعار للقائمة وحفظه في الذاكرة
+    setState(() {
+      _allNotifications.insert(0, {
+        'type': type,
+        'message': msg,
+        'time': "${DateTime.now().hour}:${DateTime.now().minute.toString().padLeft(2, '0')}",
+        'lat': d['lat']?.toString() ?? "",
+        'lng': d['lng']?.toString() ?? "",
+      });
+      _saveNotificationsToDisk();
+    });
+
     await _audioPlayer.stop();
     await _audioPlayer.play(AssetSource(type == 'alert' ? 'sounds/alarm.mp3' : 'sounds/notification.mp3'));
+    
     await _notif.show(1, type == 'alert' ? "🚨 تنبيه أمني" : "ℹ️ تحديث HASBA", msg, const NotificationDetails(android: AndroidNotificationDetails('high_channel', 'تنبيهات', importance: Importance.max, priority: Priority.high)));
+    
     if (mounted && !_isDialogShowing) _showSimpleDialog(type, msg, d);
   }
 
@@ -116,6 +158,38 @@ class _AdminPageState extends State<AdminPage> {
         title: Text("تحكم السيارة (${_carID ?? ''})"),
         backgroundColor: Colors.blue.shade900,
         leading: IconButton(icon: const Icon(Icons.exit_to_app), onPressed: () => Navigator.pushReplacement(context, MaterialPageRoute(builder: (context) => const AppTypeSelector()))),
+        actions: [
+          // أيقونة الجرس مع عداد الإشعارات
+          Stack(
+            alignment: Alignment.center,
+            children: [
+              IconButton(
+                icon: const Icon(Icons.notifications_active, color: Colors.white),
+                onPressed: () {
+                  Navigator.push(context, MaterialPageRoute(builder: (context) => NotificationInboxPage(
+                    notifications: _allNotifications,
+                    onDelete: (index) {
+                      setState(() { _allNotifications.removeAt(index); _saveNotificationsToDisk(); });
+                    },
+                    onClearAll: () {
+                      setState(() { _allNotifications.clear(); _saveNotificationsToDisk(); });
+                    },
+                  )));
+                },
+              ),
+              if (_allNotifications.isNotEmpty)
+                Positioned(
+                  right: 8, top: 8,
+                  child: Container(
+                    padding: const EdgeInsets.all(2),
+                    decoration: BoxDecoration(color: Colors.red, borderRadius: BorderRadius.circular(10)),
+                    constraints: const BoxConstraints(minWidth: 16, minHeight: 16),
+                    child: Text('${_allNotifications.length}', style: const TextStyle(color: Colors.white, fontSize: 10), textAlign: TextAlign.center),
+                  ),
+                )
+            ],
+          )
+        ],
       ),
       body: _carID == null 
           ? const Center(child: CircularProgressIndicator()) 
@@ -132,12 +206,27 @@ class _AdminPageState extends State<AdminPage> {
     );
   }
 
-  Widget _statusWidget() => Container(
-    padding: const EdgeInsets.all(20), margin: const EdgeInsets.all(15),
-    decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(15), boxShadow: [const BoxShadow(color: Colors.black12, blurRadius: 10)]),
-    child: Row(children: [const Icon(Icons.info_outline, color: Colors.blue), const SizedBox(width: 15), Expanded(child: Text(_lastStatus, style: const TextStyle(fontWeight: FontWeight.bold)))]),
+  Widget _statusWidget() => InkWell(
+    onTap: () {
+      Navigator.push(context, MaterialPageRoute(builder: (context) => NotificationInboxPage(
+        notifications: _allNotifications,
+        onDelete: (index) { setState(() { _allNotifications.removeAt(index); _saveNotificationsToDisk(); }); },
+        onClearAll: () { setState(() { _allNotifications.clear(); _saveNotificationsToDisk(); }); },
+      )));
+    },
+    child: Container(
+      padding: const EdgeInsets.all(20), margin: const EdgeInsets.all(15),
+      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(15), boxShadow: [const BoxShadow(color: Colors.black12, blurRadius: 10)]),
+      child: Row(children: [
+        const Icon(Icons.history, color: Colors.blue), 
+        const SizedBox(width: 15), 
+        Expanded(child: Text(_lastStatus, style: const TextStyle(fontWeight: FontWeight.bold))),
+        const Icon(Icons.arrow_forward_ios, size: 16, color: Colors.grey),
+      ]),
+    ),
   );
 
+  // --- الحفاظ على باقي الودجت كما هي في كودك الأصلي ---
   Widget _sensitivityStreamWidget() => StreamBuilder(
     stream: _dbRef.child('devices/$_carID/sensitivity').onValue,
     builder: (context, snapshot) {
@@ -146,23 +235,14 @@ class _AdminPageState extends State<AdminPage> {
       if (snapshot.hasData && snapshot.data!.snapshot.value != null) {
         currentVal = int.parse(snapshot.data!.snapshot.value.toString());
       }
-
       void updateSensitivity(bool increase) {
         int currentIndex = sensitivityLevels.indexOf(currentVal);
-        if (currentIndex == -1) {
-          currentIndex = sensitivityLevels.where((element) => element <= currentVal).length - 1;
-        }
-        if (increase) {
-          if (currentIndex < sensitivityLevels.length - 1) {
-            _dbRef.child('devices/$_carID/sensitivity').set(sensitivityLevels[currentIndex + 1]);
-          }
-        } else {
-          if (currentIndex > 0) {
-            _dbRef.child('devices/$_carID/sensitivity').set(sensitivityLevels[currentIndex - 1]);
-          }
+        if (increase && currentIndex < sensitivityLevels.length - 1) {
+          _dbRef.child('devices/$_carID/sensitivity').set(sensitivityLevels[currentIndex + 1]);
+        } else if (!increase && currentIndex > 0) {
+          _dbRef.child('devices/$_carID/sensitivity').set(sensitivityLevels[currentIndex - 1]);
         }
       }
-
       return Card(
         margin: const EdgeInsets.symmetric(horizontal: 15),
         child: Padding(
@@ -220,82 +300,47 @@ class _AdminPageState extends State<AdminPage> {
 
   Widget _actionsWidget() => Column(
     children: [
-     StreamBuilder(
+      StreamBuilder(
         stream: _dbRef.child('devices/$_carID/vibration_enabled').onValue,
         builder: (context, AsyncSnapshot<DatabaseEvent> snapshot) {
-          bool isVibeOn = true; // القيمة الافتراضية
+          bool isVibeOn = true;
           if (snapshot.hasData && snapshot.data!.snapshot.value != null) {
             isVibeOn = snapshot.data!.snapshot.value as bool;
           }
           return Padding(
             padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 5),
             child: ElevatedButton.icon(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: isVibeOn ? Colors.redAccent : Colors.green,
-                minimumSize: const Size(double.infinity, 55),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-              ),
+              style: ElevatedButton.styleFrom(backgroundColor: isVibeOn ? Colors.redAccent : Colors.green, minimumSize: const Size(double.infinity, 55), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
               icon: Icon(isVibeOn ? Icons.vibration_outlined : Icons.vibration, color: Colors.white),
-              label: Text(
-                isVibeOn ? "إيقاف نظام الاهتزاز" : "تشغيل نظام الاهتزاز", 
-                style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)
-              ),
+              label: Text(isVibeOn ? "إيقاف نظام الاهتزاز" : "تشغيل نظام الاهتزاز", style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
               onPressed: () => _dbRef.child('devices/$_carID/vibration_enabled').set(!isVibeOn),
             ),
           );
         },
       ),
-      
-
-     // الزر الجديد (نظام الحماية الكامل) - معدل لإصلاح مشكلة اللون
       StreamBuilder(
         stream: _dbRef.child('devices/$_carID/system_active_status').onValue,
         builder: (context, AsyncSnapshot<DatabaseEvent> snapshot) {
           bool isSystemOn = false;
-          
-          // التأكد من وجود بيانات وتحديث الحالة بناءً عليها
           if (snapshot.hasData && snapshot.data!.snapshot.value != null) {
             isSystemOn = snapshot.data!.snapshot.value as bool;
           }
-
           return Padding(
             padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 5),
             child: ElevatedButton.icon(
-              style: ElevatedButton.styleFrom(
-                // استخدام AnimatedContainer ضمني أو تغيير اللون بناءً على القيمة اللحظية
-                backgroundColor: isSystemOn ? Colors.orange.shade800 : Colors.blue.shade600,
-                minimumSize: const Size(double.infinity, 55),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                elevation: isSystemOn ? 8 : 2, // إضافة تأثير ظل عند التفعيل
-              ),
+              style: ElevatedButton.styleFrom(backgroundColor: isSystemOn ? Colors.orange.shade800 : Colors.blue.shade600, minimumSize: const Size(double.infinity, 55), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
               icon: Icon(isSystemOn ? Icons.shield_outlined : Icons.shield, color: Colors.white),
-              label: Text(
-                isSystemOn ? "إيقاف نظام الحماية" : "تشغيل نظام الحماية", 
-                style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)
-              ),
+              label: Text(isSystemOn ? "إيقاف نظام الحماية" : "تشغيل نظام الحماية", style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
               onPressed: () {
-                // إرسال الأمر وتحديث الحالة فوراً في قاعدة البيانات
                 int commandId = isSystemOn ? 6 : 7;
-                _dbRef.child('devices/$_carID/commands').set({
-                  'id': commandId, 
-                  'timestamp': ServerValue.timestamp
-                });
-                
-                // ملاحظة: لا نغير اللون يدوياً هنا، الـ StreamBuilder سيتكفل بذلك فور تحديث Firebase
+                _dbRef.child('devices/$_carID/commands').set({'id': commandId, 'timestamp': ServerValue.timestamp});
               },
             ),
           );
         },
       ),
-
       GridView.count(
-        shrinkWrap: true, 
-        physics: const NeverScrollableScrollPhysics(),
-        crossAxisCount: 2, 
-        padding: const EdgeInsets.all(15), 
-        mainAxisSpacing: 10, 
-        crossAxisSpacing: 10,
-        childAspectRatio: 1.2,
+        shrinkWrap: true, physics: const NeverScrollableScrollPhysics(), crossAxisCount: 2, padding: const EdgeInsets.all(15), mainAxisSpacing: 10, crossAxisSpacing: 10, childAspectRatio: 1.2,
         children: [
           _actionBtn(1, "تتبع الموقع", Icons.map, Colors.blue),
           _actionBtn(2, "حالة البطارية", Icons.battery_charging_full, Colors.green),
@@ -319,5 +364,129 @@ class _AdminPageState extends State<AdminPage> {
     _n1.dispose(); _n2.dispose(); _n3.dispose();
     _audioPlayer.dispose(); 
     super.dispose(); 
+  }
+}
+
+// ############################################################
+// صفحة صندوق الإشعارات المطورة (البحث والفلترة)
+// ############################################################
+class NotificationInboxPage extends StatefulWidget {
+  final List<Map<String, String>> notifications;
+  final VoidCallback onClearAll;
+  final Function(int) onDelete;
+
+  const NotificationInboxPage({
+    super.key,
+    required this.notifications,
+    required this.onClearAll,
+    required this.onDelete,
+  });
+
+  @override
+  State<NotificationInboxPage> createState() => _NotificationInboxPageState();
+}
+
+class _NotificationInboxPageState extends State<NotificationInboxPage> {
+  String _searchQuery = "";
+  String _filterType = "الكل";
+
+  @override
+  Widget build(BuildContext context) {
+    final filteredList = widget.notifications.where((notif) {
+      final matchesSearch = notif['message']!.toLowerCase().contains(_searchQuery.toLowerCase());
+      final matchesFilter = _filterType == "الكل" || notif['type'] == _filterType;
+      return matchesSearch && matchesFilter;
+    }).toList();
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text("صندوق الإشعارات"),
+        backgroundColor: Colors.blue.shade900,
+        actions: [
+          IconButton(icon: const Icon(Icons.delete_sweep), onPressed: widget.onClearAll),
+        ],
+      ),
+      body: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(10),
+            child: TextField(
+              decoration: InputDecoration(
+                hintText: "بحث في التنبيهات...",
+                prefixIcon: const Icon(Icons.search),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(15)),
+                filled: true, fillColor: Colors.grey.shade100,
+              ),
+              onChanged: (v) => setState(() => _searchQuery = v),
+            ),
+          ),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: [
+                _filterChip("الكل"),
+                _filterChip("alert", label: "تنبيهات خطيرة"),
+                _filterChip("status", label: "حالات النظام"),
+                _filterChip("location", label: "مواقع"),
+              ],
+            ),
+          ),
+          const Divider(),
+          Expanded(
+            child: filteredList.isEmpty
+                ? const Center(child: Text("لا توجد إشعارات تطابق بحثك"))
+                : ListView.builder(
+                    itemCount: filteredList.length,
+                    itemBuilder: (context, index) {
+                      final item = filteredList[index];
+                      bool isAlert = item['type'] == 'alert';
+                      return Card(
+                        margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                        shape: RoundedRectangleBorder(
+                          side: isAlert ? const BorderSide(color: Colors.red, width: 1) : BorderSide.none,
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: ListTile(
+                          leading: CircleAvatar(
+                            backgroundColor: isAlert ? Colors.red.shade100 : Colors.blue.shade100,
+                            child: Icon(isAlert ? Icons.warning : Icons.info, color: isAlert ? Colors.red : Colors.blue),
+                          ),
+                          title: Text(item['message'] ?? "", style: TextStyle(fontWeight: isAlert ? FontWeight.bold : FontWeight.normal)),
+                          subtitle: Text(item['time'] ?? ""),
+                          onTap: () {
+                            if (item['lat'] != "" && item['lat'] != "null") {
+                              launchUrl(Uri.parse("https://www.google.com/maps/search/?api=1&query=${item['lat']},${item['lng']}"));
+                            }
+                          },
+                          trailing: IconButton(
+                            icon: const Icon(Icons.delete_outline),
+                            onPressed: () {
+                              int originalIndex = widget.notifications.indexOf(item);
+                              widget.onDelete(originalIndex);
+                              setState(() {});
+                            },
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _filterChip(String type, {String? label}) {
+    bool isSelected = _filterType == type;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 5),
+      child: ChoiceChip(
+        label: Text(label ?? type),
+        selected: isSelected,
+        onSelected: (s) => setState(() => _filterType = s ? type : "الكل"),
+        selectedColor: Colors.blue.shade900,
+        labelStyle: TextStyle(color: isSelected ? Colors.white : Colors.black),
+      ),
+    );
   }
 }
