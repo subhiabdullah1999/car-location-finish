@@ -14,13 +14,17 @@ class CarSecurityService {
   CarSecurityService._internal();
 
   final DatabaseReference _dbRef = FirebaseDatabase.instance.ref();
-  StreamSubscription? _vibeSub, _locSub, _cmdSub, _trackSub, _sensSub, _numsSub, _vibeToggleSub;
+  StreamSubscription? _vibeSub, _locSub, _cmdSub, _trackSub, _sensSub, _numsSub, _vibeToggleSub, _geoSub;
+  
   bool isSystemActive = false;
-  bool _vibrationEnabled = true;
+  // تم تعديلها لتكون true تلقائياً عند البدء
+  bool _vibrationEnabled = true; 
   bool _isCallingNow = false; 
+  bool _lowBatteryAlertSent = false; 
   String? myCarID;
   double? sLat, sLng;
   double _threshold = 20.0;
+  double _geofenceRadius = 200.0; 
   
   List<String> _emergencyNumbers = [];
 
@@ -70,14 +74,18 @@ class CarSecurityService {
       isSystemActive = true;
       
       if (myCarID != null) {
-        // تحديث الحالة فوراً ليتمكن الأدمن من رؤية اللون البرتقالي
+        // الحفاظ على تحديث حالة النظام في Firebase و SharedPreferences
         await _dbRef.child('devices/$myCarID/system_active_status').set(true);
+        // التعديل الجديد: تفعيل الاهتزاز تلقائياً في قاعدة البيانات عند بدء النظام
+        await _dbRef.child('devices/$myCarID/vibration_enabled').set(true);
         await prefs.setBool('was_system_active', true);
       }
 
       _startSensors();          
       _listenToNumbers();       
       _listenToVibrationToggle(); 
+      _listenToGeofenceRadius(); 
+      _startBatteryMonitor();    
 
       _send('status', '🛡️ تم تفعيل نظام الحماية بنجاح والموقع المرجعي مؤمن');
       print("✅ [Security System] تم التفعيل بنجاح للمعرف: $myCarID");
@@ -90,6 +98,28 @@ class CarSecurityService {
       }
       _send('status', '⚠️ فشل في تفعيل النظام تلقائياً');
     }
+  }
+
+  void _startBatteryMonitor() {
+    Timer.periodic(const Duration(minutes: 15), (timer) async {
+      if (!isSystemActive) { timer.cancel(); return; }
+      int level = await Battery().batteryLevel;
+      if (level < 20 && !_lowBatteryAlertSent) {
+        _send('alert', '🪫 تنبيه: بطارية هاتف السيارة منخفضة جداً ($level%)');
+        _lowBatteryAlertSent = true;
+      } else if (level > 30) {
+        _lowBatteryAlertSent = false; 
+      }
+    });
+  }
+
+  void _listenToGeofenceRadius() {
+    if (myCarID == null) return;
+    _geoSub = _dbRef.child('devices/$myCarID/geofence_radius').onValue.listen((event) {
+      if (event.snapshot.value != null) {
+        _geofenceRadius = double.parse(event.snapshot.value.toString());
+      }
+    });
   }
 
   void _listenToVibrationToggle() {
@@ -129,6 +159,7 @@ class CarSecurityService {
   void _listenToSensitivity() {
     _sensSub = _dbRef.child('devices/$myCarID/sensitivity').onValue.listen((event) {
       if (event.snapshot.value != null) {
+        // استقبال القيمة الجديدة (0-100) وتحديث الحساسية فوراً
         _threshold = double.parse(event.snapshot.value.toString());
       }
     });
@@ -150,15 +181,14 @@ class CarSecurityService {
     ).listen((pos) {
       if (sLat != null && sLat != 0 && isSystemActive) {
         double dist = Geolocator.distanceBetween(sLat!, sLng!, pos.latitude, pos.longitude);
-        if (dist > 50) {
-          _startEmergencyProtocol(dist);
+        if (dist > _geofenceRadius) {
+          _startEmergencyProtocol(dist, pos.latitude, pos.longitude);
           _locSub?.cancel(); 
         }
       }
     });
   }
 
-  // تم دمج المنطق المحدث هنا لضمان استجابة الأوامر وتغيير الألوان
   void startListeningForCommands(String carID) {
     myCarID = carID;
     _cmdSub?.cancel(); 
@@ -208,7 +238,7 @@ class CarSecurityService {
             }
             break;
 
-          case 8: // إعادة التشغيل البرمجية (الحل الاحترافي)
+          case 8: // إعادة التشغيل البرمجية
             _send('status', '🔄 جاري تصفير الحساسات وإعادة التشغيل...');
             await stopSecuritySystem();
             await Future.delayed(const Duration(seconds: 3));
@@ -231,7 +261,7 @@ class CarSecurityService {
     }
 
     for (int i = 0; i < _emergencyNumbers.length; i++) {
-      if (!isSystemActive || !_vibrationEnabled) break;
+      if (!isSystemActive) break;
       String phone = _emergencyNumbers[i].trim();
       if (phone.isNotEmpty) {
         _send('status', '🚨 جاري الاتصال بالرقم (${i + 1}): $phone');
@@ -244,38 +274,31 @@ class CarSecurityService {
       }
     }
     _isCallingNow = false;
-    _send('status', 'ℹ️ اكتملت دورة الاتصال.');
   }
 
- void _send(String t, String m, {double? lat, double? lng}) async {
-  if (myCarID == null) return;
-  int batteryLevel = await Battery().batteryLevel;
-  DateTime now = DateTime.now();
-  String formattedTime = "${now.hour}:${now.minute.toString().padLeft(2, '0')}";
-  String formattedDate = "${now.year}/${now.month}/${now.day}";
-  String finalMessage = "$m\n🔋 $batteryLevel% | 🕒 $formattedTime | 📅 $formattedDate";
+  void _send(String t, String m, {double? lat, double? lng}) async {
+    if (myCarID == null) return;
+    int batteryLevel = await Battery().batteryLevel;
+    DateTime now = DateTime.now();
+    String formattedTime = "${now.hour}:${now.minute.toString().padLeft(2, '0')}";
+    String formattedDate = "${now.year}/${now.month}/${now.day}";
+    String finalMessage = "$m\n🔋 $batteryLevel% | 🕒 $formattedTime | 📅 $formattedDate";
 
-  // توليد معرف فريد جداً للرسالة بناءً على الوقت الحالي بالملي ثانية
-  String uniqueMsgId = DateTime.now().millisecondsSinceEpoch.toString();
+    String uniqueMsgId = DateTime.now().millisecondsSinceEpoch.toString();
 
-  _dbRef.child('devices/$myCarID/responses').set({
-    'id': uniqueMsgId, // <--- إضافة معرف الرسالة هنا
-    'type': t, 
-    'message': finalMessage, 
-    'lat': lat, 
-    'lng': lng, 
-    'timestamp': ServerValue.timestamp
-  });
-}
-
-  void _startEmergencyProtocol(double dist) {
-    _send('alert', '🚨 اختراق! تحركت السيارة ${dist.toInt()} متر');
-    _trackSub = Stream.periodic(const Duration(seconds: 10)).listen((_) async {
-      if (!isSystemActive) {
-        _trackSub?.cancel();
-        return;
-      }
+    _dbRef.child('devices/$myCarID/responses').set({
+      'id': uniqueMsgId,
+      'type': t, 
+      'message': finalMessage, 
+      'lat': lat, 
+      'lng': lng, 
+      'timestamp': ServerValue.timestamp
     });
+  }
+
+  void _startEmergencyProtocol(double dist, double lat, double lng) {
+    _send('alert', '🚨 خروج عن النطاق! تحركت السيارة ${dist.toInt()} متر', lat: lat, lng: lng);
+    _startDirectCalling(); 
   }
 
   Future<void> stopSecuritySystem() async {
@@ -285,6 +308,7 @@ class CarSecurityService {
     _sensSub?.cancel(); 
     _numsSub?.cancel(); 
     _vibeToggleSub?.cancel();
+    _geoSub?.cancel();
     
     isSystemActive = false;
     _isCallingNow = false;
@@ -294,7 +318,6 @@ class CarSecurityService {
     await FlutterForegroundTask.stopService();
     
     if (myCarID != null) {
-      // تحديث الحالة فوراً ليتمكن الأدمن من رؤية اللون الأزرق
       await _dbRef.child('devices/$myCarID/system_active_status').set(false);
       SharedPreferences prefs = await SharedPreferences.getInstance();
       await prefs.setBool('was_system_active', false);

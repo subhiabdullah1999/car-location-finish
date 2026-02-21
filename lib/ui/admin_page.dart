@@ -1,4 +1,5 @@
 import 'package:car_location/main.dart';
+import 'package:car_location/ui/geofence_map.dart';
 import 'package:car_location/ui/notification_page.dart';
 import 'package:car_location/ui/type_selctor_page.dart';
 import 'package:flutter/material.dart';
@@ -7,8 +8,9 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart'; 
 import 'dart:async';
-import 'dart:convert'; // ضروري لتحويل البيانات JSON
+import 'dart:convert'; 
 
 class AdminPage extends StatefulWidget {
   const AdminPage({super.key});
@@ -31,8 +33,11 @@ class _AdminPageState extends State<AdminPage> {
   bool _isDialogShowing = false;
   bool _isExpanded = true; 
 
-  // قائمة تخزين الإشعارات (الميزة الجديدة)
   List<Map<String, String>> _allNotifications = [];
+  String? _lastMessageId; 
+
+  // قائمة الحساسية المطلوبة (24 مستوى)
+  final List<int> _sensitivityLevels = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 20, 25, 30, 35, 40, 45, 50, 60, 70, 80, 90, 100];
 
   @override
   void initState() {
@@ -41,15 +46,14 @@ class _AdminPageState extends State<AdminPage> {
     _loadSavedNumbers();
   }
 
-  // تحميل الأرقام والإشعارات المحفوظة
   void _loadSavedNumbers() async {
     SharedPreferences prefs = await SharedPreferences.getInstance();
     _carID = prefs.getString('car_id');
     
     if (_carID != null) {
       _listenToStatus();
-      _loadNotificationsFromDisk(); // تحميل الإشعارات القديمة
-      
+      _loadNotificationsFromDisk();
+
       setState(() {
         _n1.text = prefs.getString('num1_$_carID') ?? "";
         _n2.text = prefs.getString('num2_$_carID') ?? "";
@@ -76,91 +80,76 @@ class _AdminPageState extends State<AdminPage> {
     }
   }
 
-  // منطق حفظ الإشعارات في الذاكرة
+  // --- ميزة الحفظ الدائم للإشعارات ---
   void _saveNotificationsToDisk() async {
     SharedPreferences prefs = await SharedPreferences.getInstance();
     String encodedData = json.encode(_allNotifications);
     await prefs.setString('saved_notifs_$_carID', encodedData);
   }
 
-  // منطق تحميل الإشعارات من الذاكرة
-void _loadNotificationsFromDisk() async {
-  SharedPreferences prefs = await SharedPreferences.getInstance();
-  String? savedData = prefs.getString('saved_notifs_$_carID');
-  if (savedData != null) {
-    setState(() {
-      _allNotifications = List<Map<String, String>>.from(
-        json.decode(savedData).map((item) => Map<String, String>.from(item))
-      );
-      // ضبط المعرف الأخير من آخر إشعار محفوظ في الذاكرة
-      if (_allNotifications.isNotEmpty) {
-        _lastMessageId = _allNotifications.first['id'];
-      }
-    });
+  void _loadNotificationsFromDisk() async {
+    SharedPreferences prefs = await SharedPreferences.getInstance();
+    String? savedData = prefs.getString('saved_notifs_$_carID');
+    if (savedData != null) {
+      setState(() {
+        _allNotifications = List<Map<String, String>>.from(
+          json.decode(savedData).map((item) => Map<String, String>.from(item))
+        );
+        if (_allNotifications.isNotEmpty) {
+          _lastMessageId = _allNotifications.first['id'];
+        }
+      });
+    }
   }
-}
+
   void _setupNotifs() async {
     const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
     await _notif.initialize(const InitializationSettings(android: androidInit));
   }
 
- int? _lastProcessedTimestamp; // متغير في أعلى الكلاس لحفظ آخر وقت تمت معالجته
-
-String? _lastMessageId; // أضف هذا المتغير في أعلى الكلاس لتتبع آخر ID
-
-void _listenToStatus() {
-  _statusSub = _dbRef.child('devices/$_carID/responses').onValue.listen((event) {
-    if (!mounted || event.snapshot.value == null) return;
-    try {
-      var data = event.snapshot.value;
-      if (data is Map) {
-        Map d = Map<dynamic, dynamic>.from(data);
-        
-        // جلب معرف الرسالة الفريد
-        String currentMsgId = d['id']?.toString() ?? "";
-
-        // التحقق: إذا كان المعرف مختلفاً عن آخر معرف عالجناه
-        if (currentMsgId != _lastMessageId) {
-          _lastMessageId = currentMsgId; // تحديث المعرف الأخير
-          
-          setState(() { 
-            _lastStatus = d['message'] ?? ""; 
-          });
-          
-          _handleResponse(d);
+  void _listenToStatus() {
+    _statusSub = _dbRef.child('devices/$_carID/responses').onValue.listen((event) {
+      if (!mounted || event.snapshot.value == null) return;
+      try {
+        var data = event.snapshot.value;
+        if (data is Map) {
+          Map d = Map<dynamic, dynamic>.from(data);
+          String currentMsgId = d['id']?.toString() ?? "";
+          if (currentMsgId != _lastMessageId) {
+            _lastMessageId = currentMsgId; 
+            setState(() { _lastStatus = d['message'] ?? ""; });
+            _handleResponse(d);
+          }
         }
-      }
-    } catch (e) {
-      print("❌ Error listening to status: $e");
-    }
-  });
-}
-
- void _handleResponse(Map d) async {
-  String type = d['type'] ?? '';
-  String msg = d['message'] ?? '';
-  
-  setState(() {
-    _allNotifications.insert(0, {
-      'type': type,
-      'message': msg,
-      'time': "${DateTime.now().hour}:${DateTime.now().minute.toString().padLeft(2, '0')}",
-      'lat': d['lat']?.toString() ?? "",
-      'lng': d['lng']?.toString() ?? "",
-      'timestamp': d['timestamp']?.toString() ?? "0", // حفظ الطابع للفلترة لاحقاً
+      } catch (e) { print("❌ Error: $e"); }
     });
-    _saveNotificationsToDisk();
-  });
+  }
 
-  // منطق الصوت والتنبيهات...
-  await _audioPlayer.stop();
-  await _audioPlayer.play(AssetSource(type == 'alert' ? 'sounds/alarm.mp3' : 'sounds/notification.mp3'));
-  
-  await _notif.show(1, type == 'alert' ? "🚨 تنبيه أمني" : "ℹ️ تحديث HASBA", msg, 
-    const NotificationDetails(android: AndroidNotificationDetails('high_channel', 'تنبيهات', importance: Importance.max, priority: Priority.high)));
+  void _handleResponse(Map d) async {
+    String type = d['type'] ?? '';
+    String msg = d['message'] ?? '';
     
-  if (mounted && !_isDialogShowing) _showSimpleDialog(type, msg, d);
-}
+    setState(() {
+      _allNotifications.insert(0, {
+        'id': d['id']?.toString() ?? "", 
+        'type': type,
+        'message': msg,
+        'time': "${DateTime.now().hour}:${DateTime.now().minute.toString().padLeft(2, '0')}",
+        'lat': d['lat']?.toString() ?? "",
+        'lng': d['lng']?.toString() ?? "",
+        'timestamp': d['timestamp']?.toString() ?? "0",
+      });
+      _saveNotificationsToDisk();
+    });
+
+    await _audioPlayer.stop();
+    await _audioPlayer.play(AssetSource(type == 'alert' ? 'sounds/alarm.mp3' : 'sounds/notification.mp3'));
+    
+    await _notif.show(1, type == 'alert' ? "🚨 تنبيه أمني" : "ℹ️ تحديث HASBA", msg, 
+      const NotificationDetails(android: AndroidNotificationDetails('high_channel', 'تنبيهات', importance: Importance.max, priority: Priority.high)));
+    
+    if (mounted && !_isDialogShowing) _showSimpleDialog(type, msg, d);
+  }
 
   void _showSimpleDialog(String type, String msg, Map d) {
     _isDialogShowing = true;
@@ -181,38 +170,7 @@ void _listenToStatus() {
         title: Text("تحكم السيارة (${_carID ?? ''})"),
         backgroundColor: Colors.blue.shade900,
         leading: IconButton(icon: const Icon(Icons.exit_to_app), onPressed: () => Navigator.pushReplacement(context, MaterialPageRoute(builder: (context) => const AppTypeSelector()))),
-        actions: [
-          // أيقونة الجرس مع عداد الإشعارات
-          Stack(
-            alignment: Alignment.center,
-            children: [
-              IconButton(
-                icon: const Icon(Icons.notifications_active, color: Colors.white),
-                onPressed: () {
-                  Navigator.push(context, MaterialPageRoute(builder: (context) => NotificationInboxPage(
-                    notifications: _allNotifications,
-                    onDelete: (index) {
-                      setState(() { _allNotifications.removeAt(index); _saveNotificationsToDisk(); });
-                    },
-                    onClearAll: () {
-                      setState(() { _allNotifications.clear(); _saveNotificationsToDisk(); });
-                    },
-                  )));
-                },
-              ),
-              if (_allNotifications.isNotEmpty)
-                Positioned(
-                  right: 8, top: 8,
-                  child: Container(
-                    padding: const EdgeInsets.all(2),
-                    decoration: BoxDecoration(color: Colors.red, borderRadius: BorderRadius.circular(10)),
-                    constraints: const BoxConstraints(minWidth: 16, minHeight: 16),
-                    child: Text('${_allNotifications.length}', style: const TextStyle(color: Colors.white, fontSize: 10), textAlign: TextAlign.center),
-                  ),
-                )
-            ],
-          )
-        ],
+        actions: [_notifBadge()],
       ),
       body: _carID == null 
           ? const Center(child: CircularProgressIndicator()) 
@@ -220,23 +178,35 @@ void _listenToStatus() {
               child: Column(
                 children: [
                   _statusWidget(),
-                  _sensitivityStreamWidget(),
+                  _sensitivityLevelsWidget(), // التحكم بالحساسية الجديد
                   _numbersWidget(),
-                  _actionsWidget(),
+                  _actionsWidget(), // الأزرار المحدثة بدون زر تفعيل النظام
                 ],
               ),
             ),
     );
   }
 
+  Widget _notifBadge() => Stack(
+    alignment: Alignment.center,
+    children: [
+      IconButton(
+        icon: const Icon(Icons.notifications_active, color: Colors.white),
+        onPressed: () {
+          Navigator.push(context, MaterialPageRoute(builder: (context) => NotificationInboxPage(
+            notifications: _allNotifications,
+            onDelete: (index) { setState(() { _allNotifications.removeAt(index); _saveNotificationsToDisk(); }); },
+            onClearAll: () { setState(() { _allNotifications.clear(); _saveNotificationsToDisk(); }); },
+          )));
+        },
+      ),
+      if (_allNotifications.isNotEmpty)
+        Positioned(right: 8, top: 8, child: Container(padding: const EdgeInsets.all(2), decoration: BoxDecoration(color: Colors.red, borderRadius: BorderRadius.circular(10)), constraints: const BoxConstraints(minWidth: 16, minHeight: 16), child: Text('${_allNotifications.length}', style: const TextStyle(color: Colors.white, fontSize: 10), textAlign: TextAlign.center))),
+    ],
+  );
+
   Widget _statusWidget() => InkWell(
-    onTap: () {
-      Navigator.push(context, MaterialPageRoute(builder: (context) => NotificationInboxPage(
-        notifications: _allNotifications,
-        onDelete: (index) { setState(() { _allNotifications.removeAt(index); _saveNotificationsToDisk(); }); },
-        onClearAll: () { setState(() { _allNotifications.clear(); _saveNotificationsToDisk(); }); },
-      )));
-    },
+    onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => NotificationInboxPage(notifications: _allNotifications, onDelete: (i){}, onClearAll: (){}))),
     child: Container(
       padding: const EdgeInsets.all(20), margin: const EdgeInsets.all(15),
       decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(15), boxShadow: [const BoxShadow(color: Colors.black12, blurRadius: 10)]),
@@ -249,34 +219,41 @@ void _listenToStatus() {
     ),
   );
 
-  // --- الحفاظ على باقي الودجت كما هي في كودك الأصلي ---
-  Widget _sensitivityStreamWidget() => StreamBuilder(
+  Widget _sensitivityLevelsWidget() => StreamBuilder(
     stream: _dbRef.child('devices/$_carID/sensitivity').onValue,
     builder: (context, snapshot) {
-      const List<int> sensitivityLevels = [5, 6, 7, 8, 9, 10, 15, 20, 25, 30, 35, 40, 45, 50, 60, 70, 80, 90, 100];
-      int currentVal = 20;
+      int currentVal = 20; // القيمة الافتراضية
       if (snapshot.hasData && snapshot.data!.snapshot.value != null) {
         currentVal = int.parse(snapshot.data!.snapshot.value.toString());
       }
-      void updateSensitivity(bool increase) {
-        int currentIndex = sensitivityLevels.indexOf(currentVal);
-        if (increase && currentIndex < sensitivityLevels.length - 1) {
-          _dbRef.child('devices/$_carID/sensitivity').set(sensitivityLevels[currentIndex + 1]);
-        } else if (!increase && currentIndex > 0) {
-          _dbRef.child('devices/$_carID/sensitivity').set(sensitivityLevels[currentIndex - 1]);
-        }
-      }
       return Card(
-        margin: const EdgeInsets.symmetric(horizontal: 15),
+        margin: const EdgeInsets.all(15),
+        elevation: 4,
         child: Padding(
           padding: const EdgeInsets.all(15),
           child: Column(children: [
-            const Text("🎚️ حساسية الاهتزاز", style: TextStyle(fontWeight: FontWeight.bold)),
+            const Text("🎚️ مستوى حساسية الاهتزاز", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
             const SizedBox(height: 10),
             Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [
-              IconButton(icon: const Icon(Icons.remove_circle, color: Colors.red, size: 35), onPressed: () => updateSensitivity(false)),
-              Text("$currentVal", style: const TextStyle(fontSize: 25, fontWeight: FontWeight.bold)),
-              IconButton(icon: const Icon(Icons.add_circle, color: Colors.green, size: 35), onPressed: () => updateSensitivity(true)),
+              IconButton(
+                icon: const Icon(Icons.remove_circle, color: Colors.red, size: 40), 
+                onPressed: () {
+                  int idx = _sensitivityLevels.indexOf(currentVal);
+                  if (idx > 0) _dbRef.child('devices/$_carID/sensitivity').set(_sensitivityLevels[idx - 1]);
+                }
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                decoration: BoxDecoration(color: Colors.blue.shade50, borderRadius: BorderRadius.circular(10)),
+                child: Text("$currentVal", style: const TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: Colors.blue)),
+              ),
+              IconButton(
+                icon: const Icon(Icons.add_circle, color: Colors.green, size: 40), 
+                onPressed: () {
+                  int idx = _sensitivityLevels.indexOf(currentVal);
+                  if (idx < _sensitivityLevels.length - 1) _dbRef.child('devices/$_carID/sensitivity').set(_sensitivityLevels[idx + 1]);
+                }
+              ),
             ])
           ]),
         ),
@@ -284,88 +261,75 @@ void _listenToStatus() {
     }
   );
 
-  Widget _numbersWidget() {
-    return Card(
-      margin: const EdgeInsets.all(15),
-      child: ExpansionTile(
-        key: GlobalKey(),
-        initiallyExpanded: _isExpanded,
-        onExpansionChanged: (val) => setState(() => _isExpanded = val),
-        title: const Text("📞 أرقام الطوارئ المحفوظة"),
-        children: [
-          Padding(
-            padding: const EdgeInsets.all(15),
-            child: Column(children: [
-              TextField(controller: _n1, keyboardType: TextInputType.phone, decoration: const InputDecoration(labelText: "رقم 1", prefixIcon: Icon(Icons.phone))),
-              TextField(controller: _n2, keyboardType: TextInputType.phone, decoration: const InputDecoration(labelText: "رقم 2", prefixIcon: Icon(Icons.phone))),
-              TextField(controller: _n3, keyboardType: TextInputType.phone, decoration: const InputDecoration(labelText: "رقم 3", prefixIcon: Icon(Icons.phone))),
-              const SizedBox(height: 15),
-              ElevatedButton.icon(
-                style: ElevatedButton.styleFrom(backgroundColor: Colors.blue.shade800, minimumSize: const Size(double.infinity, 50)),
-                icon: const Icon(Icons.save, color: Colors.white),
-                onPressed: () async {
-                  await _dbRef.child('devices/$_carID/numbers').set({'1': _n1.text, '2': _n2.text, '3': _n3.text});
-                  SharedPreferences prefs = await SharedPreferences.getInstance();
-                  await prefs.setString('num1_$_carID', _n1.text);
-                  await prefs.setString('num2_$_carID', _n2.text);
-                  await prefs.setString('num3_$_carID', _n3.text);
-                  setState(() { _isExpanded = false; });
-                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("✅ تم الحفظ بنجاح")));
-                }, 
-                label: const Text("حفظ وتعديل", style: TextStyle(color: Colors.white)),
-              ),
-            ]),
-          )
-        ],
-      ),
-    );
-  }
+  Widget _numbersWidget() => Card(
+    margin: const EdgeInsets.symmetric(horizontal: 15),
+    child: ExpansionTile(
+      key: GlobalKey(),
+      initiallyExpanded: _isExpanded,
+      onExpansionChanged: (val) => setState(() => _isExpanded = val),
+      title: const Text("📞 أرقام الطوارئ المحفوظة"),
+      children: [
+        Padding(padding: const EdgeInsets.all(15), child: Column(children: [
+          TextField(controller: _n1, keyboardType: TextInputType.phone, decoration: const InputDecoration(labelText: "رقم 1", prefixIcon: Icon(Icons.phone))),
+          TextField(controller: _n2, keyboardType: TextInputType.phone, decoration: const InputDecoration(labelText: "رقم 2", prefixIcon: Icon(Icons.phone))),
+          TextField(controller: _n3, keyboardType: TextInputType.phone, decoration: const InputDecoration(labelText: "رقم 3", prefixIcon: Icon(Icons.phone))),
+          const SizedBox(height: 15),
+          ElevatedButton.icon(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.blue.shade800, minimumSize: const Size(double.infinity, 50)),
+            icon: const Icon(Icons.save, color: Colors.white),
+            onPressed: () async {
+              await _dbRef.child('devices/$_carID/numbers').set({'1': _n1.text, '2': _n2.text, '3': _n3.text});
+              SharedPreferences prefs = await SharedPreferences.getInstance();
+              await prefs.setString('num1_$_carID', _n1.text);
+              await prefs.setString('num2_$_carID', _n2.text);
+              await prefs.setString('num3_$_carID', _n3.text);
+              setState(() { _isExpanded = false; });
+            }, 
+            label: const Text("حفظ وتعديل الأرقام", style: TextStyle(color: Colors.white)),
+          ),
+        ])),
+      ],
+    ),
+  );
 
   Widget _actionsWidget() => Column(
     children: [
       StreamBuilder(
         stream: _dbRef.child('devices/$_carID/vibration_enabled').onValue,
-        builder: (context, AsyncSnapshot<DatabaseEvent> snapshot) {
-          bool isVibeOn = true;
-          if (snapshot.hasData && snapshot.data!.snapshot.value != null) {
-            isVibeOn = snapshot.data!.snapshot.value as bool;
-          }
+        builder: (context, snapshot) {
+          // الاهتزاز مفعل (True) افتراضياً
+          bool isVibeOn = snapshot.hasData && snapshot.data!.snapshot.value != null 
+              ? snapshot.data!.snapshot.value == true 
+              : true; 
           return Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 5),
+            padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 10),
             child: ElevatedButton.icon(
-              style: ElevatedButton.styleFrom(backgroundColor: isVibeOn ? Colors.redAccent : Colors.green, minimumSize: const Size(double.infinity, 55), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: isVibeOn ? Colors.redAccent : Colors.green, 
+                minimumSize: const Size(double.infinity, 55),
+                elevation: 5
+              ),
               icon: Icon(isVibeOn ? Icons.vibration_outlined : Icons.vibration, color: Colors.white),
-              label: Text(isVibeOn ? "إيقاف نظام الاهتزاز" : "تشغيل نظام الاهتزاز", style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+              label: Text(isVibeOn ? "إيقاف نظام الاهتزاز" : "تشغيل نظام الاهتزاز", 
+                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
               onPressed: () => _dbRef.child('devices/$_carID/vibration_enabled').set(!isVibeOn),
             ),
           );
         },
       ),
-      StreamBuilder(
-        stream: _dbRef.child('devices/$_carID/system_active_status').onValue,
-        builder: (context, AsyncSnapshot<DatabaseEvent> snapshot) {
-          bool isSystemOn = false;
-          if (snapshot.hasData && snapshot.data!.snapshot.value != null) {
-            isSystemOn = snapshot.data!.snapshot.value as bool;
-          }
-          return Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 5),
-            child: ElevatedButton.icon(
-              style: ElevatedButton.styleFrom(backgroundColor: isSystemOn ? Colors.orange.shade800 : Colors.blue.shade600, minimumSize: const Size(double.infinity, 55), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
-              icon: Icon(isSystemOn ? Icons.shield_outlined : Icons.shield, color: Colors.white),
-              label: Text(isSystemOn ? "إيقاف نظام الحماية" : "تشغيل نظام الحماية", style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
-              onPressed: () {
-                int commandId = isSystemOn ? 6 : 7;
-                _dbRef.child('devices/$_carID/commands').set({'id': commandId, 'timestamp': ServerValue.timestamp});
-              },
-            ),
-          );
-        },
-      ),
       GridView.count(
-        shrinkWrap: true, physics: const NeverScrollableScrollPhysics(), crossAxisCount: 2, padding: const EdgeInsets.all(15), mainAxisSpacing: 10, crossAxisSpacing: 10, childAspectRatio: 1.2,
+        shrinkWrap: true, 
+        physics: const NeverScrollableScrollPhysics(), 
+        crossAxisCount: 2, 
+        padding: const EdgeInsets.all(15), 
+        mainAxisSpacing: 10, 
+        crossAxisSpacing: 10, 
+        childAspectRatio: 1.2,
         children: [
           _actionBtn(1, "تتبع الموقع", Icons.map, Colors.blue),
+          _customActionBtn("نطاق الأمان", Icons.track_changes, Colors.purple, () {
+            Navigator.push(context, MaterialPageRoute(builder: (context) => GeofencePage(carID: _carID!)));
+          }),
           _actionBtn(2, "حالة البطارية", Icons.battery_charging_full, Colors.green),
           _actionBtn(5, "اتصال بالسيارة", Icons.phone_forwarded, Colors.teal),
           _actionBtn(8, "إعادة تشغيل", Icons.power_settings_new, Colors.redAccent),
@@ -375,9 +339,18 @@ void _listenToStatus() {
   );
 
   Widget _actionBtn(int id, String l, IconData i, Color c) => Card(
+    elevation: 2,
     child: InkWell(
       onTap: () => _dbRef.child('devices/$_carID/commands').set({'id': id, 'timestamp': ServerValue.timestamp}),
-      child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [Icon(i, color: c, size: 40), const SizedBox(height: 5), Text(l, textAlign: TextAlign.center)]),
+      child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [Icon(i, color: c, size: 40), const SizedBox(height: 8), Text(l, textAlign: TextAlign.center, style: const TextStyle(fontWeight: FontWeight.w500))]),
+    ),
+  );
+
+  Widget _customActionBtn(String l, IconData i, Color c, VoidCallback action) => Card(
+    elevation: 2,
+    child: InkWell(
+      onTap: action,
+      child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [Icon(i, color: c, size: 40), const SizedBox(height: 8), Text(l, textAlign: TextAlign.center, style: const TextStyle(fontWeight: FontWeight.w500))]),
     ),
   );
 
@@ -389,4 +362,3 @@ void _listenToStatus() {
     super.dispose(); 
   }
 }
-

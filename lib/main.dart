@@ -45,7 +45,3 @@ Future<void> requestPermissions() async {
   
   print("Permissions status: $statuses");
 }
-
-
-
-
