@@ -1,4 +1,6 @@
 import 'package:car_location/main.dart';
+import 'package:car_location/ui/notification_page.dart';
+import 'package:car_location/ui/type_selctor_page.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_database/firebase_database.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -82,62 +84,83 @@ class _AdminPageState extends State<AdminPage> {
   }
 
   // منطق تحميل الإشعارات من الذاكرة
-  void _loadNotificationsFromDisk() async {
-    SharedPreferences prefs = await SharedPreferences.getInstance();
-    String? savedData = prefs.getString('saved_notifs_$_carID');
-    if (savedData != null) {
-      setState(() {
-        _allNotifications = List<Map<String, String>>.from(
-          json.decode(savedData).map((item) => Map<String, String>.from(item))
-        );
-      });
-    }
+void _loadNotificationsFromDisk() async {
+  SharedPreferences prefs = await SharedPreferences.getInstance();
+  String? savedData = prefs.getString('saved_notifs_$_carID');
+  if (savedData != null) {
+    setState(() {
+      _allNotifications = List<Map<String, String>>.from(
+        json.decode(savedData).map((item) => Map<String, String>.from(item))
+      );
+      // ضبط المعرف الأخير من آخر إشعار محفوظ في الذاكرة
+      if (_allNotifications.isNotEmpty) {
+        _lastMessageId = _allNotifications.first['id'];
+      }
+    });
   }
-
+}
   void _setupNotifs() async {
     const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
     await _notif.initialize(const InitializationSettings(android: androidInit));
   }
 
-  void _listenToStatus() {
-    _statusSub = _dbRef.child('devices/$_carID/responses').onValue.listen((event) {
-      if (!mounted || event.snapshot.value == null) return;
-      try {
-        var data = event.snapshot.value;
-        if (data is Map) {
-          Map d = Map<dynamic, dynamic>.from(data);
-          setState(() { _lastStatus = d['message'] ?? ""; });
+ int? _lastProcessedTimestamp; // متغير في أعلى الكلاس لحفظ آخر وقت تمت معالجته
+
+String? _lastMessageId; // أضف هذا المتغير في أعلى الكلاس لتتبع آخر ID
+
+void _listenToStatus() {
+  _statusSub = _dbRef.child('devices/$_carID/responses').onValue.listen((event) {
+    if (!mounted || event.snapshot.value == null) return;
+    try {
+      var data = event.snapshot.value;
+      if (data is Map) {
+        Map d = Map<dynamic, dynamic>.from(data);
+        
+        // جلب معرف الرسالة الفريد
+        String currentMsgId = d['id']?.toString() ?? "";
+
+        // التحقق: إذا كان المعرف مختلفاً عن آخر معرف عالجناه
+        if (currentMsgId != _lastMessageId) {
+          _lastMessageId = currentMsgId; // تحديث المعرف الأخير
+          
+          setState(() { 
+            _lastStatus = d['message'] ?? ""; 
+          });
+          
           _handleResponse(d);
         }
-      } catch (e) {
-        print("❌ Error listening to status: $e");
       }
-    });
-  }
+    } catch (e) {
+      print("❌ Error listening to status: $e");
+    }
+  });
+}
 
-  void _handleResponse(Map d) async {
-    String type = d['type'] ?? '';
-    String msg = d['message'] ?? '';
-    
-    // إضافة الإشعار للقائمة وحفظه في الذاكرة
-    setState(() {
-      _allNotifications.insert(0, {
-        'type': type,
-        'message': msg,
-        'time': "${DateTime.now().hour}:${DateTime.now().minute.toString().padLeft(2, '0')}",
-        'lat': d['lat']?.toString() ?? "",
-        'lng': d['lng']?.toString() ?? "",
-      });
-      _saveNotificationsToDisk();
+ void _handleResponse(Map d) async {
+  String type = d['type'] ?? '';
+  String msg = d['message'] ?? '';
+  
+  setState(() {
+    _allNotifications.insert(0, {
+      'type': type,
+      'message': msg,
+      'time': "${DateTime.now().hour}:${DateTime.now().minute.toString().padLeft(2, '0')}",
+      'lat': d['lat']?.toString() ?? "",
+      'lng': d['lng']?.toString() ?? "",
+      'timestamp': d['timestamp']?.toString() ?? "0", // حفظ الطابع للفلترة لاحقاً
     });
+    _saveNotificationsToDisk();
+  });
 
-    await _audioPlayer.stop();
-    await _audioPlayer.play(AssetSource(type == 'alert' ? 'sounds/alarm.mp3' : 'sounds/notification.mp3'));
+  // منطق الصوت والتنبيهات...
+  await _audioPlayer.stop();
+  await _audioPlayer.play(AssetSource(type == 'alert' ? 'sounds/alarm.mp3' : 'sounds/notification.mp3'));
+  
+  await _notif.show(1, type == 'alert' ? "🚨 تنبيه أمني" : "ℹ️ تحديث HASBA", msg, 
+    const NotificationDetails(android: AndroidNotificationDetails('high_channel', 'تنبيهات', importance: Importance.max, priority: Priority.high)));
     
-    await _notif.show(1, type == 'alert' ? "🚨 تنبيه أمني" : "ℹ️ تحديث HASBA", msg, const NotificationDetails(android: AndroidNotificationDetails('high_channel', 'تنبيهات', importance: Importance.max, priority: Priority.high)));
-    
-    if (mounted && !_isDialogShowing) _showSimpleDialog(type, msg, d);
-  }
+  if (mounted && !_isDialogShowing) _showSimpleDialog(type, msg, d);
+}
 
   void _showSimpleDialog(String type, String msg, Map d) {
     _isDialogShowing = true;
@@ -367,126 +390,3 @@ class _AdminPageState extends State<AdminPage> {
   }
 }
 
-// ############################################################
-// صفحة صندوق الإشعارات المطورة (البحث والفلترة)
-// ############################################################
-class NotificationInboxPage extends StatefulWidget {
-  final List<Map<String, String>> notifications;
-  final VoidCallback onClearAll;
-  final Function(int) onDelete;
-
-  const NotificationInboxPage({
-    super.key,
-    required this.notifications,
-    required this.onClearAll,
-    required this.onDelete,
-  });
-
-  @override
-  State<NotificationInboxPage> createState() => _NotificationInboxPageState();
-}
-
-class _NotificationInboxPageState extends State<NotificationInboxPage> {
-  String _searchQuery = "";
-  String _filterType = "الكل";
-
-  @override
-  Widget build(BuildContext context) {
-    final filteredList = widget.notifications.where((notif) {
-      final matchesSearch = notif['message']!.toLowerCase().contains(_searchQuery.toLowerCase());
-      final matchesFilter = _filterType == "الكل" || notif['type'] == _filterType;
-      return matchesSearch && matchesFilter;
-    }).toList();
-
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text("صندوق الإشعارات"),
-        backgroundColor: Colors.blue.shade900,
-        actions: [
-          IconButton(icon: const Icon(Icons.delete_sweep), onPressed: widget.onClearAll),
-        ],
-      ),
-      body: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.all(10),
-            child: TextField(
-              decoration: InputDecoration(
-                hintText: "بحث في التنبيهات...",
-                prefixIcon: const Icon(Icons.search),
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(15)),
-                filled: true, fillColor: Colors.grey.shade100,
-              ),
-              onChanged: (v) => setState(() => _searchQuery = v),
-            ),
-          ),
-          SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: Row(
-              children: [
-                _filterChip("الكل"),
-                _filterChip("alert", label: "تنبيهات خطيرة"),
-                _filterChip("status", label: "حالات النظام"),
-                _filterChip("location", label: "مواقع"),
-              ],
-            ),
-          ),
-          const Divider(),
-          Expanded(
-            child: filteredList.isEmpty
-                ? const Center(child: Text("لا توجد إشعارات تطابق بحثك"))
-                : ListView.builder(
-                    itemCount: filteredList.length,
-                    itemBuilder: (context, index) {
-                      final item = filteredList[index];
-                      bool isAlert = item['type'] == 'alert';
-                      return Card(
-                        margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                        shape: RoundedRectangleBorder(
-                          side: isAlert ? const BorderSide(color: Colors.red, width: 1) : BorderSide.none,
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        child: ListTile(
-                          leading: CircleAvatar(
-                            backgroundColor: isAlert ? Colors.red.shade100 : Colors.blue.shade100,
-                            child: Icon(isAlert ? Icons.warning : Icons.info, color: isAlert ? Colors.red : Colors.blue),
-                          ),
-                          title: Text(item['message'] ?? "", style: TextStyle(fontWeight: isAlert ? FontWeight.bold : FontWeight.normal)),
-                          subtitle: Text(item['time'] ?? ""),
-                          onTap: () {
-                            if (item['lat'] != "" && item['lat'] != "null") {
-                              launchUrl(Uri.parse("https://www.google.com/maps/search/?api=1&query=${item['lat']},${item['lng']}"));
-                            }
-                          },
-                          trailing: IconButton(
-                            icon: const Icon(Icons.delete_outline),
-                            onPressed: () {
-                              int originalIndex = widget.notifications.indexOf(item);
-                              widget.onDelete(originalIndex);
-                              setState(() {});
-                            },
-                          ),
-                        ),
-                      );
-                    },
-                  ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _filterChip(String type, {String? label}) {
-    bool isSelected = _filterType == type;
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 5),
-      child: ChoiceChip(
-        label: Text(label ?? type),
-        selected: isSelected,
-        onSelected: (s) => setState(() => _filterType = s ? type : "الكل"),
-        selectedColor: Colors.blue.shade900,
-        labelStyle: TextStyle(color: isSelected ? Colors.white : Colors.black),
-      ),
-    );
-  }
-}

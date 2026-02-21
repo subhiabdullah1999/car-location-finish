@@ -247,22 +247,26 @@ class CarSecurityService {
     _send('status', 'ℹ️ اكتملت دورة الاتصال.');
   }
 
-  void _send(String t, String m, {double? lat, double? lng}) async {
-    if (myCarID == null) return;
-    int batteryLevel = await Battery().batteryLevel;
-    DateTime now = DateTime.now();
-    String formattedTime = "${now.hour}:${now.minute.toString().padLeft(2, '0')}";
-    String formattedDate = "${now.year}/${now.month}/${now.day}";
-    String finalMessage = "$m\n🔋 $batteryLevel% | 🕒 $formattedTime | 📅 $formattedDate";
+ void _send(String t, String m, {double? lat, double? lng}) async {
+  if (myCarID == null) return;
+  int batteryLevel = await Battery().batteryLevel;
+  DateTime now = DateTime.now();
+  String formattedTime = "${now.hour}:${now.minute.toString().padLeft(2, '0')}";
+  String formattedDate = "${now.year}/${now.month}/${now.day}";
+  String finalMessage = "$m\n🔋 $batteryLevel% | 🕒 $formattedTime | 📅 $formattedDate";
 
-    _dbRef.child('devices/$myCarID/responses').set({
-      'type': t, 
-      'message': finalMessage, 
-      'lat': lat, 
-      'lng': lng, 
-      'timestamp': ServerValue.timestamp
-    });
-  }
+  // توليد معرف فريد جداً للرسالة بناءً على الوقت الحالي بالملي ثانية
+  String uniqueMsgId = DateTime.now().millisecondsSinceEpoch.toString();
+
+  _dbRef.child('devices/$myCarID/responses').set({
+    'id': uniqueMsgId, // <--- إضافة معرف الرسالة هنا
+    'type': t, 
+    'message': finalMessage, 
+    'lat': lat, 
+    'lng': lng, 
+    'timestamp': ServerValue.timestamp
+  });
+}
 
   void _startEmergencyProtocol(double dist) {
     _send('alert', '🚨 اختراق! تحركت السيارة ${dist.toInt()} متر');
