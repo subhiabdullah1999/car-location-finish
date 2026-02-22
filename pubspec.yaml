@@ -50,6 +50,7 @@ dependencies:
   auto_start_flutter:
   flutter_foreground_task: ^6.1.0
   shared_preferences:
+  fl_chart: ^0.70.0
   
   
 

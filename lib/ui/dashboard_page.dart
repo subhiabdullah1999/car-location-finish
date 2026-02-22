@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_database/firebase_database.dart';
 import 'dart:math' as math;
+import 'package:fl_chart/fl_chart.dart'; // إضافة مكتبة الرسم البياني
 
 class DashboardPage extends StatefulWidget {
   final String carID;
@@ -15,6 +16,12 @@ class _DashboardPageState extends State<DashboardPage> {
   double _currentSpeed = 0.0;
   double _totalDistance = 0.0;
   double _avgSpeed = 0.0;
+  double _maxSpeed = 0.0;
+
+  // --- متغيرات الرسم البياني الجديدة ---
+  List<FlSpot> _speedDataPoints = []; 
+  int _timerCounter = 0;
+  // ----------------------------------
 
   @override
   void initState() {
@@ -30,6 +37,15 @@ class _DashboardPageState extends State<DashboardPage> {
           _currentSpeed = double.tryParse(data['current_speed'].toString()) ?? 0.0;
           _totalDistance = double.tryParse(data['total_distance'].toString()) ?? 0.0;
           _avgSpeed = double.tryParse(data['avg_speed'].toString()) ?? 0.0;
+          _maxSpeed = double.tryParse(data['max_speed'].toString()) ?? 0.0;
+
+          // تحديث بيانات الرسم البياني لحظياً
+          _timerCounter++;
+          _speedDataPoints.add(FlSpot(_timerCounter.toDouble(), _currentSpeed));
+          // الاحتفاظ بآخر 30 نقطة فقط لضمان سلاسة العرض
+          if (_speedDataPoints.length > 30) {
+            _speedDataPoints.removeAt(0);
+          }
         });
       }
     });
@@ -39,7 +55,13 @@ class _DashboardPageState extends State<DashboardPage> {
     _dbRef.child('devices/${widget.carID}/trip_data').update({
       'total_distance': 0.0,
       'avg_speed': 0.0,
+      'max_speed': 0.0,
       'reset_timestamp': ServerValue.timestamp,
+    });
+    // تصفير الرسم البياني أيضاً عند تصفير العداد
+    setState(() {
+      _speedDataPoints.clear();
+      _timerCounter = 0;
     });
   }
 
@@ -59,7 +81,7 @@ class _DashboardPageState extends State<DashboardPage> {
           padding: const EdgeInsets.all(20),
           child: Column(
             children: [
-              // عداد السرعة مع المؤشر
+              // 1. عداد السرعة مع المؤشر (الكود الأصلي)
               Center(
                 child: Stack(
                   alignment: Alignment.center,
@@ -79,13 +101,23 @@ class _DashboardPageState extends State<DashboardPage> {
                   ],
                 ),
               ),
-              const SizedBox(height: 30),
-              // بطاقات المعلومات
+              const SizedBox(height: 25),
+
+              // 2. الرسم البياني المضاف حديثاً
+              const Text("تحليل السرعة اللحظي", style: TextStyle(color: Colors.grey, fontSize: 13, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 10),
+              _buildSpeedChart(isDark),
+              const SizedBox(height: 25),
+
+              // 3. بطاقات المعلومات (الكود الأصلي)
               _infoCard("المسافة المقطوعة الكلية", "${_totalDistance.toStringAsFixed(2)} كم", Icons.route, isDark),
-              const SizedBox(height: 15),
+              const SizedBox(height: 12),
+              _infoCard("أقصى سرعة مسجلة", "${_maxSpeed.toStringAsFixed(1)} كم/ساعة", Icons.trending_up, isDark),
+              const SizedBox(height: 12),
               _infoCard("متوسط سرعة الرحلة", "${_avgSpeed.toStringAsFixed(1)} كم/ساعة", Icons.speed, isDark),
               const SizedBox(height: 30),
-              // زر التصفير
+
+              // 4. زر التصفير (الكود الأصلي)
               ElevatedButton.icon(
                 style: ElevatedButton.styleFrom(
                   backgroundColor: Colors.redAccent,
@@ -94,10 +126,45 @@ class _DashboardPageState extends State<DashboardPage> {
                 ),
                 onPressed: _resetDistance,
                 icon: const Icon(Icons.refresh, color: Colors.white),
-                label: const Text("تصفير عداد المسافة", style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+                label: const Text("تصفير كافة بيانات الرحلة", style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+
+  // ويدجت الرسم البياني الجديد
+  Widget _buildSpeedChart(bool isDark) {
+    return Container(
+      height: 150,
+      width: double.infinity,
+      padding: const EdgeInsets.only(top: 10, right: 10),
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF1E1E1E) : Colors.white,
+        borderRadius: BorderRadius.circular(15),
+        border: Border.all(color: isDark ? Colors.white10 : Colors.transparent),
+      ),
+      child: LineChart(
+        LineChartData(
+          gridData: FlGridData(show: false),
+          titlesData: FlTitlesData(show: false),
+          borderData: FlBorderData(show: false),
+          lineBarsData: [
+            LineChartBarData(
+              spots: _speedDataPoints.isEmpty ? [const FlSpot(0, 0)] : _speedDataPoints,
+              isCurved: true,
+              color: Colors.greenAccent,
+              barWidth: 3,
+              isStrokeCapRound: true,
+              dotData: const FlDotData(show: false),
+              belowBarData: BarAreaData(
+                show: true,
+                color: Colors.greenAccent.withOpacity(0.1),
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -117,7 +184,6 @@ class _DashboardPageState extends State<DashboardPage> {
   }
 
   Widget _buildNeedle(double speed) {
-    // حساب الزاوية: السرعة من 0 إلى 220 كم/س
     double angle = (speed / 220) * 240 - 120; 
     return Transform.rotate(
       angle: angle * (math.pi / 180),
@@ -161,7 +227,6 @@ class _DashboardPageState extends State<DashboardPage> {
   }
 }
 
-// رسم خطوط عداد الساعة
 class GaugeTicksPainter extends CustomPainter {
   final bool isDark;
   GaugeTicksPainter(this.isDark);

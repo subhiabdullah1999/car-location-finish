@@ -11,19 +11,21 @@ import 'dart:io';
 class CarSecurityService {
   static final CarSecurityService _instance = CarSecurityService._internal();
   factory CarSecurityService() => _instance;
-  CarSecurityService._internal();
-
-  final DatabaseReference _dbRef = FirebaseDatabase.instance.ref();
-  // --- متغيرات تتبع الرحلة الجديدة ---
   
+  // --- متغيرات تتبع الرحلة والسرعة القصوى ---
+  double _maxSpeed = 0.0; // مضاف حديثاً
   double _totalDistance = 0.0;
   Position? _lastPosition;
   StreamSubscription<Position>? _positionStream;
-  // ----------------------------------
+  // ----------------------------------------
+
+  CarSecurityService._internal();
+
+  final DatabaseReference _dbRef = FirebaseDatabase.instance.ref();
+  
   StreamSubscription? _vibeSub, _locSub, _cmdSub, _trackSub, _sensSub, _numsSub, _vibeToggleSub, _geoSub;
   
   bool isSystemActive = false;
-  // تم تعديلها لتكون true تلقائياً عند البدء
   bool _vibrationEnabled = true; 
   bool _isCallingNow = false; 
   bool _lowBatteryAlertSent = false; 
@@ -80,9 +82,7 @@ class CarSecurityService {
       isSystemActive = true;
       
       if (myCarID != null) {
-        // الحفاظ على تحديث حالة النظام في Firebase و SharedPreferences
         await _dbRef.child('devices/$myCarID/system_active_status').set(true);
-        // التعديل الجديد: تفعيل الاهتزاز تلقائياً في قاعدة البيانات عند بدء النظام
         await _dbRef.child('devices/$myCarID/vibration_enabled').set(true);
         await prefs.setBool('was_system_active', true);
       }
@@ -165,7 +165,6 @@ class CarSecurityService {
   void _listenToSensitivity() {
     _sensSub = _dbRef.child('devices/$myCarID/sensitivity').onValue.listen((event) {
       if (event.snapshot.value != null) {
-        // استقبال القيمة الجديدة (0-100) وتحديث الحساسية فوراً
         _threshold = double.parse(event.snapshot.value.toString());
       }
     });
@@ -254,14 +253,12 @@ class CarSecurityService {
         }
       }
     });
-    // تشغيل تتبع السرعة والمسافة فور بدء الخدمة
+
     _startTripTracking(carID);
     _listenForResetCommand(carID);
   }
 
-  // دالة جديدة تماماً لحساب السرعة والمسافة
   void _startTripTracking(String carId) async {
-    // التأكد من الصلاحيات أولاً
     LocationPermission permission = await Geolocator.checkPermission();
     if (permission == LocationPermission.denied) {
       permission = await Geolocator.requestPermission();
@@ -269,31 +266,35 @@ class CarSecurityService {
 
     const LocationSettings locationSettings = LocationSettings(
       accuracy: LocationAccuracy.high,
-      distanceFilter: 2, // تحديث كل مترين لدقة المسافة
+      distanceFilter: 2, 
     );
 
     _positionStream = Geolocator.getPositionStream(locationSettings: locationSettings)
         .listen((Position position) {
       
-      // 1. حساب السرعة الحالية (كم/س)
       double speedKmh = position.speed * 3.6;
-      if (speedKmh < 0.5) speedKmh = 0; // تجاهل القيم الصغيرة جداً (الضوضاء)
+      if (speedKmh < 0.5) speedKmh = 0; 
 
-      // 2. حساب المسافة المقطوعة تراكمياً
+      // --- منطق حساب السرعة القصوى ---
+      if (speedKmh > _maxSpeed) {
+        _maxSpeed = speedKmh;
+      }
+      // ----------------------------
+
       if (_lastPosition != null) {
         double distanceInMeters = Geolocator.distanceBetween(
           _lastPosition!.latitude, _lastPosition!.longitude,
           position.latitude, position.longitude,
         );
-        _totalDistance += (distanceInMeters / 1000); // تحويل لكيلومتر
+        _totalDistance += (distanceInMeters / 1000);
       }
       _lastPosition = position;
 
-      // 3. تحديث Firebase بالبيانات الجديدة
       _dbRef.child('devices/$carId/trip_data').update({
         'current_speed': speedKmh,
+        'max_speed': _maxSpeed, // تحديث السرعة القصوى في Firebase
         'total_distance': _totalDistance,
-        'avg_speed': speedKmh > 1 ? (speedKmh + 20) / 2 : 0, // مثال لحساب تقريبي
+        'avg_speed': speedKmh > 1 ? (speedKmh + 20) / 2 : 0, 
         'lat': position.latitude,
         'lng': position.longitude,
         'last_update': ServerValue.timestamp,
@@ -301,12 +302,12 @@ class CarSecurityService {
     });
   }
 
-  // دالة للاستماع لأمر التصفير من الأدمن
   void _listenForResetCommand(String carId) {
     _dbRef.child('devices/$carId/trip_data/total_distance').onValue.listen((event) {
       var val = event.snapshot.value;
       if (val == 0 || val == 0.0) {
         _totalDistance = 0.0;
+        _maxSpeed = 0.0; // تصفير السرعة القصوى محلياً عند تصفير العداد
         _lastPosition = null;
       }
     });
@@ -371,6 +372,7 @@ class CarSecurityService {
     _numsSub?.cancel(); 
     _vibeToggleSub?.cancel();
     _geoSub?.cancel();
+    _positionStream?.cancel(); // إيقاف تتبع الرحلة عند إيقاف النظام
     
     isSystemActive = false;
     _isCallingNow = false;
