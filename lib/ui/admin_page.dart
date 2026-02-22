@@ -35,7 +35,6 @@ class _AdminPageState extends State<AdminPage> {
   bool _isExpanded = true; 
 
   List<Map<String, String>> _allNotifications = [];
-  
   String? _lastMessageId; 
 
   final List<int> _sensitivityLevels = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 20, 25, 30, 35, 40, 45, 50, 60, 70, 80, 90, 100];
@@ -71,7 +70,7 @@ class _AdminPageState extends State<AdminPage> {
               _n2.text = data['2']?.toString() ?? _n2.text;
               _n3.text = data['3']?.toString() ?? _n3.text;
             } else if (data is List) {
-              if (data.length > 0) _n1.text = data[0]?.toString() ?? _n1.text;
+              if (data.isNotEmpty) _n1.text = data[0]?.toString() ?? _n1.text;
               if (data.length > 1) _n2.text = data[1]?.toString() ?? _n2.text;
               if (data.length > 2) _n3.text = data[2]?.toString() ?? _n3.text;
             }
@@ -119,7 +118,7 @@ class _AdminPageState extends State<AdminPage> {
             _handleResponse(d);
           }
         }
-      } catch (e) { print("❌ Error: $e"); }
+      } catch (e) { debugPrint("❌ Error: $e"); }
     });
   }
 
@@ -152,7 +151,6 @@ class _AdminPageState extends State<AdminPage> {
   void _showSimpleDialog(String type, String msg, Map d) {
     _isDialogShowing = true;
     showDialog(context: context, barrierDismissible: false, builder: (c) {
-      final isDark = Theme.of(context).brightness == Brightness.dark;
       return AlertDialog(
         title: Text(type == 'alert' ? "🚨 تحذير" : "ℹ️ إشعار"),
         content: Text(msg),
@@ -190,7 +188,6 @@ class _AdminPageState extends State<AdminPage> {
                   _sensitivityLevelsWidget(isDark), 
                   _numbersWidget(isDark),
                   _actionsWidget(isDark), 
-                  
                 ],
               ),
             ),
@@ -348,8 +345,8 @@ class _AdminPageState extends State<AdminPage> {
           _actionBtn(5, "اتصال بالسيارة", Icons.phone_forwarded, Colors.teal, isDark),
           _actionBtn(8, "إعادة تشغيل", Icons.power_settings_new, Colors.redAccent, isDark),
           _customActionBtn("مراقبة الرحلة", Icons.speed, Colors.orange, isDark, () {
-  Navigator.push(context, MaterialPageRoute(builder: (context) => DashboardPage(carID: _carID!)));
-}),
+            Navigator.push(context, MaterialPageRoute(builder: (context) => DashboardPage(carID: _carID!)));
+          }),
         ],
       ),
     ],

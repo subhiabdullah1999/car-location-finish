@@ -17,11 +17,12 @@ class _DashboardPageState extends State<DashboardPage> {
   double _totalDistance = 0.0;
   double _avgSpeed = 0.0;
   double _maxSpeed = 0.0;
-
-  // --- متغيرات الرسم البياني الجديدة ---
+  
+  // --- ميزات التحكم في السرعة والرسم البياني المضافة ---
+  double _speedLimit = 90.0; // قيمة افتراضية لحد السرعة
   List<FlSpot> _speedDataPoints = []; 
   int _timerCounter = 0;
-  // ----------------------------------
+  // --------------------------------------------------
 
   @override
   void initState() {
@@ -30,6 +31,15 @@ class _DashboardPageState extends State<DashboardPage> {
   }
 
   void _listenToTripData() {
+    // الاستماع لقيمة حد السرعة المحددة في قاعدة البيانات
+    _dbRef.child('devices/${widget.carID}/speed_limit').onValue.listen((event) {
+      if (event.snapshot.value != null && mounted) {
+        setState(() {
+          _speedLimit = double.tryParse(event.snapshot.value.toString()) ?? 90.0;
+        });
+      }
+    });
+
     _dbRef.child('devices/${widget.carID}/trip_data').onValue.listen((event) {
       if (event.snapshot.value != null && mounted) {
         var data = Map<dynamic, dynamic>.from(event.snapshot.value as Map);
@@ -68,12 +78,15 @@ class _DashboardPageState extends State<DashboardPage> {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final accentColor = Colors.greenAccent.shade400;
+    
+    // تحديد اللون بناءً على ما إذا كانت السرعة تجاوزت الحد المسموح
+    bool isOverSpeed = _currentSpeed > _speedLimit;
+    Color dynamicSpeedColor = isOverSpeed ? Colors.redAccent : (isDark ? Colors.white : Colors.black87);
 
     return Scaffold(
       backgroundColor: isDark ? const Color(0xFF121212) : Colors.grey.shade100,
       appBar: AppBar(
-        title: const Text("مراقبة السرعة والمسافة"),
+        title: const Text("مراقبة وتحكم السرعة"),
         backgroundColor: isDark ? const Color(0xFF1F1F1F) : Colors.blue.shade900,
       ),
       body: SingleChildScrollView(
@@ -81,7 +94,7 @@ class _DashboardPageState extends State<DashboardPage> {
           padding: const EdgeInsets.all(20),
           child: Column(
             children: [
-              // 1. عداد السرعة مع المؤشر (الكود الأصلي)
+              // 1. عداد السرعة مع المؤشر
               Center(
                 child: Stack(
                   alignment: Alignment.center,
@@ -93,7 +106,7 @@ class _DashboardPageState extends State<DashboardPage> {
                       child: Column(
                         children: [
                           Text("${_currentSpeed.toInt()}", 
-                            style: TextStyle(fontSize: 45, fontWeight: FontWeight.bold, color: isDark ? Colors.white : Colors.black87)),
+                            style: TextStyle(fontSize: 45, fontWeight: FontWeight.bold, color: dynamicSpeedColor)),
                           Text("km/h", style: TextStyle(color: isDark ? Colors.white54 : Colors.black54)),
                         ],
                       ),
@@ -103,13 +116,17 @@ class _DashboardPageState extends State<DashboardPage> {
               ),
               const SizedBox(height: 25),
 
-              // 2. الرسم البياني المضاف حديثاً
-              const Text("تحليل السرعة اللحظي", style: TextStyle(color: Colors.grey, fontSize: 13, fontWeight: FontWeight.bold)),
-              const SizedBox(height: 10),
-              _buildSpeedChart(isDark),
+              // 2. واجهة التحكم في حد السرعة (Slider) - ميزة جديدة
+              _buildSpeedLimitSlider(isDark),
               const SizedBox(height: 25),
 
-              // 3. بطاقات المعلومات (الكود الأصلي)
+              // 3. الرسم البياني
+              const Text("تحليل السرعة اللحظي", style: TextStyle(color: Colors.grey, fontSize: 13, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 10),
+              _buildSpeedChart(isDark, isOverSpeed),
+              const SizedBox(height: 25),
+
+              // 4. بطاقات المعلومات
               _infoCard("المسافة المقطوعة الكلية", "${_totalDistance.toStringAsFixed(2)} كم", Icons.route, isDark),
               const SizedBox(height: 12),
               _infoCard("أقصى سرعة مسجلة", "${_maxSpeed.toStringAsFixed(1)} كم/ساعة", Icons.trending_up, isDark),
@@ -117,7 +134,7 @@ class _DashboardPageState extends State<DashboardPage> {
               _infoCard("متوسط سرعة الرحلة", "${_avgSpeed.toStringAsFixed(1)} كم/ساعة", Icons.speed, isDark),
               const SizedBox(height: 30),
 
-              // 4. زر التصفير (الكود الأصلي)
+              // 5. زر التصفير
               ElevatedButton.icon(
                 style: ElevatedButton.styleFrom(
                   backgroundColor: Colors.redAccent,
@@ -135,8 +152,48 @@ class _DashboardPageState extends State<DashboardPage> {
     );
   }
 
-  // ويدجت الرسم البياني الجديد
-  Widget _buildSpeedChart(bool isDark) {
+  // ويدجت منزلق التحكم في حد السرعة
+  Widget _buildSpeedLimitSlider(bool isDark) {
+    return Container(
+      padding: const EdgeInsets.all(15),
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF1E1E1E) : Colors.white,
+        borderRadius: BorderRadius.circular(15),
+        border: Border.all(color: _currentSpeed > _speedLimit ? Colors.redAccent.withOpacity(0.5) : Colors.transparent),
+      ),
+      child: Column(
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text("حد السرعة المسموح", style: TextStyle(fontWeight: FontWeight.bold)),
+              Text("${_speedLimit.toInt()} كم/س", style: const TextStyle(color: Colors.blue, fontWeight: FontWeight.bold, fontSize: 18)),
+            ],
+          ),
+          Slider(
+            value: _speedLimit,
+            min: 20,
+            max: 180,
+            divisions: 16,
+            activeColor: Colors.blue,
+            label: _speedLimit.round().toString(),
+            onChanged: (double value) {
+              setState(() => _speedLimit = value);
+            },
+            onChangeEnd: (double value) {
+              // تحديث القيمة في Firebase فور الانتهاء من السحب
+              _dbRef.child('devices/${widget.carID}/speed_limit').set(value.toInt());
+            },
+          ),
+          if (_currentSpeed > _speedLimit)
+            const Text("⚠️ تنبيه: السيارة تتجاوز الحد الآن!", style: TextStyle(color: Colors.redAccent, fontSize: 12)),
+        ],
+      ),
+    );
+  }
+
+  // ويدجت الرسم البياني
+  Widget _buildSpeedChart(bool isDark, bool isOverSpeed) {
     return Container(
       height: 150,
       width: double.infinity,
@@ -155,13 +212,13 @@ class _DashboardPageState extends State<DashboardPage> {
             LineChartBarData(
               spots: _speedDataPoints.isEmpty ? [const FlSpot(0, 0)] : _speedDataPoints,
               isCurved: true,
-              color: Colors.greenAccent,
+              color: isOverSpeed ? Colors.redAccent : Colors.greenAccent,
               barWidth: 3,
               isStrokeCapRound: true,
               dotData: const FlDotData(show: false),
               belowBarData: BarAreaData(
                 show: true,
-                color: Colors.greenAccent.withOpacity(0.1),
+                color: (isOverSpeed ? Colors.redAccent : Colors.greenAccent).withOpacity(0.1),
               ),
             ),
           ],

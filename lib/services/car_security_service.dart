@@ -13,10 +13,15 @@ class CarSecurityService {
   factory CarSecurityService() => _instance;
   
   // --- متغيرات تتبع الرحلة والسرعة القصوى ---
-  double _maxSpeed = 0.0; // مضاف حديثاً
+  double _maxSpeed = 0.0; 
   double _totalDistance = 0.0;
   Position? _lastPosition;
   StreamSubscription<Position>? _positionStream;
+  
+  // --- ميزة تنبيه تجاوز السرعة الجديدة ---
+  double _speedLimit = 90.0; // الحد الافتراضي
+  bool _speedAlertSent = false; // لمنع تكرار الإشعارات
+  StreamSubscription? _limitSub;
   // ----------------------------------------
 
   CarSecurityService._internal();
@@ -85,6 +90,7 @@ class CarSecurityService {
         await _dbRef.child('devices/$myCarID/system_active_status').set(true);
         await _dbRef.child('devices/$myCarID/vibration_enabled').set(true);
         await prefs.setBool('was_system_active', true);
+        _listenToSpeedLimit(); // تفعيل الاستماع لحد السرعة عند بدء النظام
       }
 
       _startSensors();          
@@ -104,6 +110,16 @@ class CarSecurityService {
       }
       _send('status', '⚠️ فشل في تفعيل النظام تلقائياً');
     }
+  }
+
+  // ميزة الاستماع لحد السرعة المحدد من الأدمن
+  void _listenToSpeedLimit() {
+    if (myCarID == null) return;
+    _limitSub = _dbRef.child('devices/$myCarID/speed_limit').onValue.listen((event) {
+      if (event.snapshot.value != null) {
+        _speedLimit = double.tryParse(event.snapshot.value.toString()) ?? 90.0;
+      }
+    });
   }
 
   void _startBatteryMonitor() {
@@ -206,7 +222,7 @@ class CarSecurityService {
         print("📥 أمر مستلم: $id | الحالة: $isSystemActive");
 
         switch (id) {
-          case 7: // تشغيل الحماية
+          case 7:
             if (!isSystemActive) {
               await initSecuritySystem();
             } else {
@@ -214,7 +230,7 @@ class CarSecurityService {
             }
             break;
 
-          case 6: // إيقاف الحماية
+          case 6:
             if (isSystemActive) {
               await stopSecuritySystem();
             } else {
@@ -222,7 +238,7 @@ class CarSecurityService {
             }
             break;
 
-          case 1: // الموقع
+          case 1:
             if (isSystemActive) {
               await sendLocation();
             } else {
@@ -230,12 +246,12 @@ class CarSecurityService {
             }
             break;
 
-          case 2: // البطارية
+          case 2:
             await sendBattery();
             break;
 
           case 3: 
-          case 5: // اتصال
+          case 5:
             if (isSystemActive) {
               _startDirectCalling();
             } else {
@@ -243,7 +259,7 @@ class CarSecurityService {
             }
             break;
 
-          case 8: // إعادة التشغيل البرمجية
+          case 8:
             _send('status', '🔄 جاري تصفير الحساسات وإعادة التشغيل...');
             await stopSecuritySystem();
             await Future.delayed(const Duration(seconds: 3));
@@ -275,11 +291,18 @@ class CarSecurityService {
       double speedKmh = position.speed * 3.6;
       if (speedKmh < 0.5) speedKmh = 0; 
 
-      // --- منطق حساب السرعة القصوى ---
       if (speedKmh > _maxSpeed) {
         _maxSpeed = speedKmh;
       }
-      // ----------------------------
+
+      // --- منطق تنبيه تجاوز السرعة الجديد ---
+      if (speedKmh > _speedLimit && !_speedAlertSent) {
+        _send('alert', '⚠️ تنبيه: تجاوز السرعة المحددة (${_speedLimit.toInt()} كم/س)! السرعة الحالية: ${speedKmh.toInt()}');
+        _speedAlertSent = true;
+      } else if (speedKmh < (_speedLimit - 5)) {
+        _speedAlertSent = false; // إعادة التفعيل عند انخفاض السرعة لضمان عدم تكرار التنبيهات
+      }
+      // ------------------------------------
 
       if (_lastPosition != null) {
         double distanceInMeters = Geolocator.distanceBetween(
@@ -292,7 +315,7 @@ class CarSecurityService {
 
       _dbRef.child('devices/$carId/trip_data').update({
         'current_speed': speedKmh,
-        'max_speed': _maxSpeed, // تحديث السرعة القصوى في Firebase
+        'max_speed': _maxSpeed,
         'total_distance': _totalDistance,
         'avg_speed': speedKmh > 1 ? (speedKmh + 20) / 2 : 0, 
         'lat': position.latitude,
@@ -307,7 +330,7 @@ class CarSecurityService {
       var val = event.snapshot.value;
       if (val == 0 || val == 0.0) {
         _totalDistance = 0.0;
-        _maxSpeed = 0.0; // تصفير السرعة القصوى محلياً عند تصفير العداد
+        _maxSpeed = 0.0;
         _lastPosition = null;
       }
     });
@@ -372,7 +395,8 @@ class CarSecurityService {
     _numsSub?.cancel(); 
     _vibeToggleSub?.cancel();
     _geoSub?.cancel();
-    _positionStream?.cancel(); // إيقاف تتبع الرحلة عند إيقاف النظام
+    _positionStream?.cancel();
+    _limitSub?.cancel(); // إيقاف الاستماع لحد السرعة
     
     isSystemActive = false;
     _isCallingNow = false;
