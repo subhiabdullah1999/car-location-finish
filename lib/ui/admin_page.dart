@@ -1,6 +1,8 @@
 import 'package:car_location/main.dart';
+import 'package:car_location/ui/dashboard_page.dart';
 import 'package:car_location/ui/geofence_map.dart';
 import 'package:car_location/ui/notification_page.dart';
+import 'package:car_location/ui/settings_page.dart';
 import 'package:car_location/ui/type_selctor_page.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_database/firebase_database.dart';
@@ -8,7 +10,6 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:google_maps_flutter/google_maps_flutter.dart'; 
 import 'dart:async';
 import 'dart:convert'; 
 
@@ -34,9 +35,9 @@ class _AdminPageState extends State<AdminPage> {
   bool _isExpanded = true; 
 
   List<Map<String, String>> _allNotifications = [];
+  
   String? _lastMessageId; 
 
-  // قائمة الحساسية المطلوبة (24 مستوى)
   final List<int> _sensitivityLevels = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 20, 25, 30, 35, 40, 45, 50, 60, 70, 80, 90, 100];
 
   @override
@@ -80,7 +81,6 @@ class _AdminPageState extends State<AdminPage> {
     }
   }
 
-  // --- ميزة الحفظ الدائم للإشعارات ---
   void _saveNotificationsToDisk() async {
     SharedPreferences prefs = await SharedPreferences.getInstance();
     String encodedData = json.encode(_allNotifications);
@@ -95,9 +95,7 @@ class _AdminPageState extends State<AdminPage> {
         _allNotifications = List<Map<String, String>>.from(
           json.decode(savedData).map((item) => Map<String, String>.from(item))
         );
-        if (_allNotifications.isNotEmpty) {
-          _lastMessageId = _allNotifications.first['id'];
-        }
+        if (_allNotifications.isNotEmpty) _lastMessageId = _allNotifications.first['id'];
       });
     }
   }
@@ -153,34 +151,46 @@ class _AdminPageState extends State<AdminPage> {
 
   void _showSimpleDialog(String type, String msg, Map d) {
     _isDialogShowing = true;
-    showDialog(context: context, barrierDismissible: false, builder: (c) => AlertDialog(
-      title: Text(type == 'alert' ? "🚨 تحذير" : "ℹ️ إشعار"),
-      content: Text(msg),
-      actions: [
-        if (d['lat'] != null) ElevatedButton(onPressed: () => launchUrl(Uri.parse("https://www.google.com/maps/search/?api=1&query=${d['lat']},${d['lng']}")), child: const Text("فتح الخريطة")),
-        TextButton(onPressed: () { _isDialogShowing = false; Navigator.pop(c); }, child: const Text("موافق")),
-      ],
-    )).then((_) => _isDialogShowing = false);
+    showDialog(context: context, barrierDismissible: false, builder: (c) {
+      final isDark = Theme.of(context).brightness == Brightness.dark;
+      return AlertDialog(
+        title: Text(type == 'alert' ? "🚨 تحذير" : "ℹ️ إشعار"),
+        content: Text(msg),
+        actions: [
+          if (d['lat'] != null) ElevatedButton(onPressed: () => launchUrl(Uri.parse("https://www.google.com/maps/search/?api=1&query=${d['lat']},${d['lng']}")), child: const Text("فتح الخريطة")),
+          TextButton(onPressed: () { _isDialogShowing = false; Navigator.pop(c); }, child: const Text("موافق")),
+        ],
+      );
+    }).then((_) => _isDialogShowing = false);
   }
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
     return Scaffold(
       appBar: AppBar(
         title: Text("تحكم السيارة (${_carID ?? ''})"),
-        backgroundColor: Colors.blue.shade900,
+        backgroundColor: isDark ? const Color(0xFF1F1F1F) : Colors.blue.shade900,
         leading: IconButton(icon: const Icon(Icons.exit_to_app), onPressed: () => Navigator.pushReplacement(context, MaterialPageRoute(builder: (context) => const AppTypeSelector()))),
-        actions: [_notifBadge()],
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.settings, color: Colors.white),
+            onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const SettingsPage())),
+          ),
+          _notifBadge(), 
+        ],
       ),
       body: _carID == null 
           ? const Center(child: CircularProgressIndicator()) 
           : SingleChildScrollView(
               child: Column(
                 children: [
-                  _statusWidget(),
-                  _sensitivityLevelsWidget(), // التحكم بالحساسية الجديد
-                  _numbersWidget(),
-                  _actionsWidget(), // الأزرار المحدثة بدون زر تفعيل النظام
+                  _statusWidget(isDark),
+                  _sensitivityLevelsWidget(isDark), 
+                  _numbersWidget(isDark),
+                  _actionsWidget(isDark), 
+                  
                 ],
               ),
             ),
@@ -205,24 +215,29 @@ class _AdminPageState extends State<AdminPage> {
     ],
   );
 
-  Widget _statusWidget() => InkWell(
+  Widget _statusWidget(bool isDark) => InkWell(
     onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => NotificationInboxPage(notifications: _allNotifications, onDelete: (i){}, onClearAll: (){}))),
     child: Container(
       padding: const EdgeInsets.all(20), margin: const EdgeInsets.all(15),
-      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(15), boxShadow: [const BoxShadow(color: Colors.black12, blurRadius: 10)]),
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF1E1E1E) : Colors.white, 
+        borderRadius: BorderRadius.circular(15), 
+        boxShadow: [BoxShadow(color: isDark ? Colors.black54 : Colors.black12, blurRadius: 10)],
+        border: isDark ? Border.all(color: Colors.white10) : null,
+      ),
       child: Row(children: [
-        const Icon(Icons.history, color: Colors.blue), 
+        Icon(Icons.history, color: isDark ? Colors.blue.shade300 : Colors.blue), 
         const SizedBox(width: 15), 
-        Expanded(child: Text(_lastStatus, style: const TextStyle(fontWeight: FontWeight.bold))),
-        const Icon(Icons.arrow_forward_ios, size: 16, color: Colors.grey),
+        Expanded(child: Text(_lastStatus, style: TextStyle(fontWeight: FontWeight.bold, color: isDark ? Colors.white : Colors.black87))),
+        Icon(Icons.arrow_forward_ios, size: 16, color: isDark ? Colors.white54 : Colors.grey),
       ]),
     ),
   );
 
-  Widget _sensitivityLevelsWidget() => StreamBuilder(
+  Widget _sensitivityLevelsWidget(bool isDark) => StreamBuilder(
     stream: _dbRef.child('devices/$_carID/sensitivity').onValue,
     builder: (context, snapshot) {
-      int currentVal = 20; // القيمة الافتراضية
+      int currentVal = 20; 
       if (snapshot.hasData && snapshot.data!.snapshot.value != null) {
         currentVal = int.parse(snapshot.data!.snapshot.value.toString());
       }
@@ -232,7 +247,7 @@ class _AdminPageState extends State<AdminPage> {
         child: Padding(
           padding: const EdgeInsets.all(15),
           child: Column(children: [
-            const Text("🎚️ مستوى حساسية الاهتزاز", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+            Text("🎚️ مستوى حساسية الاهتزاز", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: isDark ? Colors.white : Colors.black87)),
             const SizedBox(height: 10),
             Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [
               IconButton(
@@ -244,8 +259,8 @@ class _AdminPageState extends State<AdminPage> {
               ),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-                decoration: BoxDecoration(color: Colors.blue.shade50, borderRadius: BorderRadius.circular(10)),
-                child: Text("$currentVal", style: const TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: Colors.blue)),
+                decoration: BoxDecoration(color: isDark ? Colors.blue.withOpacity(0.1) : Colors.blue.shade50, borderRadius: BorderRadius.circular(10)),
+                child: Text("$currentVal", style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: isDark ? Colors.blue.shade300 : Colors.blue)),
               ),
               IconButton(
                 icon: const Icon(Icons.add_circle, color: Colors.green, size: 40), 
@@ -261,18 +276,18 @@ class _AdminPageState extends State<AdminPage> {
     }
   );
 
-  Widget _numbersWidget() => Card(
+  Widget _numbersWidget(bool isDark) => Card(
     margin: const EdgeInsets.symmetric(horizontal: 15),
     child: ExpansionTile(
       key: GlobalKey(),
       initiallyExpanded: _isExpanded,
       onExpansionChanged: (val) => setState(() => _isExpanded = val),
-      title: const Text("📞 أرقام الطوارئ المحفوظة"),
+      title: Text("📞 أرقام الطوارئ المحفوظة", style: TextStyle(color: isDark ? Colors.white : Colors.black87)),
       children: [
         Padding(padding: const EdgeInsets.all(15), child: Column(children: [
-          TextField(controller: _n1, keyboardType: TextInputType.phone, decoration: const InputDecoration(labelText: "رقم 1", prefixIcon: Icon(Icons.phone))),
-          TextField(controller: _n2, keyboardType: TextInputType.phone, decoration: const InputDecoration(labelText: "رقم 2", prefixIcon: Icon(Icons.phone))),
-          TextField(controller: _n3, keyboardType: TextInputType.phone, decoration: const InputDecoration(labelText: "رقم 3", prefixIcon: Icon(Icons.phone))),
+          TextField(controller: _n1, keyboardType: TextInputType.phone, style: TextStyle(color: isDark ? Colors.white : Colors.black87), decoration: const InputDecoration(labelText: "رقم 1", prefixIcon: Icon(Icons.phone))),
+          TextField(controller: _n2, keyboardType: TextInputType.phone, style: TextStyle(color: isDark ? Colors.white : Colors.black87), decoration: const InputDecoration(labelText: "رقم 2", prefixIcon: Icon(Icons.phone))),
+          TextField(controller: _n3, keyboardType: TextInputType.phone, style: TextStyle(color: isDark ? Colors.white : Colors.black87), decoration: const InputDecoration(labelText: "رقم 3", prefixIcon: Icon(Icons.phone))),
           const SizedBox(height: 15),
           ElevatedButton.icon(
             style: ElevatedButton.styleFrom(backgroundColor: Colors.blue.shade800, minimumSize: const Size(double.infinity, 50)),
@@ -292,12 +307,11 @@ class _AdminPageState extends State<AdminPage> {
     ),
   );
 
-  Widget _actionsWidget() => Column(
+  Widget _actionsWidget(bool isDark) => Column(
     children: [
       StreamBuilder(
         stream: _dbRef.child('devices/$_carID/vibration_enabled').onValue,
         builder: (context, snapshot) {
-          // الاهتزاز مفعل (True) افتراضياً
           bool isVibeOn = snapshot.hasData && snapshot.data!.snapshot.value != null 
               ? snapshot.data!.snapshot.value == true 
               : true; 
@@ -326,31 +340,34 @@ class _AdminPageState extends State<AdminPage> {
         crossAxisSpacing: 10, 
         childAspectRatio: 1.2,
         children: [
-          _actionBtn(1, "تتبع الموقع", Icons.map, Colors.blue),
-          _customActionBtn("نطاق الأمان", Icons.track_changes, Colors.purple, () {
+          _actionBtn(1, "تتبع الموقع", Icons.map, Colors.blue, isDark),
+          _customActionBtn("نطاق الأمان", Icons.track_changes, Colors.purple, isDark, () {
             Navigator.push(context, MaterialPageRoute(builder: (context) => GeofencePage(carID: _carID!)));
           }),
-          _actionBtn(2, "حالة البطارية", Icons.battery_charging_full, Colors.green),
-          _actionBtn(5, "اتصال بالسيارة", Icons.phone_forwarded, Colors.teal),
-          _actionBtn(8, "إعادة تشغيل", Icons.power_settings_new, Colors.redAccent),
+          _actionBtn(2, "حالة البطارية", Icons.battery_charging_full, Colors.green, isDark),
+          _actionBtn(5, "اتصال بالسيارة", Icons.phone_forwarded, Colors.teal, isDark),
+          _actionBtn(8, "إعادة تشغيل", Icons.power_settings_new, Colors.redAccent, isDark),
+          _customActionBtn("مراقبة الرحلة", Icons.speed, Colors.orange, isDark, () {
+  Navigator.push(context, MaterialPageRoute(builder: (context) => DashboardPage(carID: _carID!)));
+}),
         ],
       ),
     ],
   );
 
-  Widget _actionBtn(int id, String l, IconData i, Color c) => Card(
+  Widget _actionBtn(int id, String l, IconData i, Color c, bool isDark) => Card(
     elevation: 2,
     child: InkWell(
       onTap: () => _dbRef.child('devices/$_carID/commands').set({'id': id, 'timestamp': ServerValue.timestamp}),
-      child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [Icon(i, color: c, size: 40), const SizedBox(height: 8), Text(l, textAlign: TextAlign.center, style: const TextStyle(fontWeight: FontWeight.w500))]),
+      child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [Icon(i, color: c, size: 40), const SizedBox(height: 8), Text(l, textAlign: TextAlign.center, style: TextStyle(fontWeight: FontWeight.w500, color: isDark ? Colors.white : Colors.black87))]),
     ),
   );
 
-  Widget _customActionBtn(String l, IconData i, Color c, VoidCallback action) => Card(
+  Widget _customActionBtn(String l, IconData i, Color c, bool isDark, VoidCallback action) => Card(
     elevation: 2,
     child: InkWell(
       onTap: action,
-      child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [Icon(i, color: c, size: 40), const SizedBox(height: 8), Text(l, textAlign: TextAlign.center, style: const TextStyle(fontWeight: FontWeight.w500))]),
+      child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [Icon(i, color: c, size: 40), const SizedBox(height: 8), Text(l, textAlign: TextAlign.center, style: TextStyle(fontWeight: FontWeight.w500, color: isDark ? Colors.white : Colors.black87))]),
     ),
   );
 

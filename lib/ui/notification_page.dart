@@ -23,7 +23,9 @@ class _NotificationInboxPageState extends State<NotificationInboxPage> {
 
   @override
   Widget build(BuildContext context) {
-    // تصفية القائمة بناءً على البحث والنوع
+    // التحقق من حالة الثيم
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
     final filteredList = widget.notifications.where((notif) {
       final matchesSearch = notif['message']!.toLowerCase().contains(_searchQuery.toLowerCase());
       final matchesFilter = _filterType == "الكل" || notif['type'] == _filterType;
@@ -31,11 +33,12 @@ class _NotificationInboxPageState extends State<NotificationInboxPage> {
     }).toList();
 
     return Scaffold(
-      backgroundColor: Colors.grey.shade50, // خلفية هادئة للعين
+      // خلفية تتغير حسب الوضع
+      backgroundColor: isDark ? const Color(0xFF121212) : Colors.grey.shade50,
       appBar: AppBar(
         elevation: 0,
         title: const Text("صندوق الإشعارات", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-        backgroundColor: Colors.blue.shade900,
+        backgroundColor: isDark ? const Color(0xFF1F1F1F) : Colors.blue.shade900,
         centerTitle: true,
         iconTheme: const IconThemeData(color: Colors.white),
         actions: [
@@ -49,16 +52,16 @@ class _NotificationInboxPageState extends State<NotificationInboxPage> {
       ),
       body: Column(
         children: [
-          _buildHeaderSection(),
+          _buildHeaderSection(isDark),
           Expanded(
             child: filteredList.isEmpty
-                ? _buildEmptyState()
+                ? _buildEmptyState(isDark)
                 : ListView.builder(
                     padding: const EdgeInsets.only(top: 10, bottom: 20),
                     itemCount: filteredList.length,
                     itemBuilder: (context, index) {
                       final item = filteredList[index];
-                      return _buildNotificationItem(item);
+                      return _buildNotificationItem(item, isDark);
                     },
                   ),
           ),
@@ -67,12 +70,11 @@ class _NotificationInboxPageState extends State<NotificationInboxPage> {
     );
   }
 
-  // الجزء العلوي: البحث والفلاتر
-  Widget _buildHeaderSection() {
+  Widget _buildHeaderSection(bool isDark) {
     return Container(
       padding: const EdgeInsets.fromLTRB(15, 15, 15, 10),
       decoration: BoxDecoration(
-        color: Colors.blue.shade900,
+        color: isDark ? const Color(0xFF1F1F1F) : Colors.blue.shade900,
         borderRadius: const BorderRadius.only(
           bottomLeft: Radius.circular(30),
           bottomRight: Radius.circular(30),
@@ -81,13 +83,14 @@ class _NotificationInboxPageState extends State<NotificationInboxPage> {
       child: Column(
         children: [
           TextField(
-            style: const TextStyle(color: Colors.black87),
+            // لون الخط داخل البحث
+            style: TextStyle(color: isDark ? Colors.white : Colors.black87),
             decoration: InputDecoration(
               hintText: "بحث في الرسائل...",
-              hintStyle: TextStyle(color: Colors.grey.shade500),
-              prefixIcon: const Icon(Icons.search, color: Colors.blue),
+              hintStyle: TextStyle(color: isDark ? Colors.grey.shade400 : Colors.grey.shade500),
+              prefixIcon: Icon(Icons.search, color: isDark ? Colors.blue.shade300 : Colors.blue),
               filled: true,
-              fillColor: Colors.white,
+              fillColor: isDark ? const Color(0xFF2C2C2C) : Colors.white,
               contentPadding: const EdgeInsets.symmetric(vertical: 0),
               border: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(20),
@@ -101,10 +104,10 @@ class _NotificationInboxPageState extends State<NotificationInboxPage> {
             scrollDirection: Axis.horizontal,
             child: Row(
               children: [
-                _filterChip("الكل", Icons.all_inclusive),
-                _filterChip("alert", Icons.warning_amber_rounded, label: "تنبيهات خطيرة"),
-                _filterChip("status", Icons.info_outline, label: "حالات النظام"),
-                _filterChip("location", Icons.location_on_outlined, label: "مواقع"),
+                _filterChip("الكل", Icons.all_inclusive, isDark),
+                _filterChip("alert", Icons.warning_amber_rounded, label: "تنبيهات خطيرة", isDark),
+                _filterChip("status", Icons.info_outline, label: "حالات النظام", isDark),
+                _filterChip("location", Icons.location_on_outlined, label: "مواقع", isDark),
               ],
             ),
           ),
@@ -114,8 +117,7 @@ class _NotificationInboxPageState extends State<NotificationInboxPage> {
     );
   }
 
-  // تصميم بطاقة الإشعار المفردة مع ميزة السحب للحذف
-  Widget _buildNotificationItem(Map<String, String> item) {
+  Widget _buildNotificationItem(Map<String, String> item, bool isDark) {
     bool isAlert = item['type'] == 'alert';
     int originalIndex = widget.notifications.indexOf(item);
 
@@ -135,21 +137,24 @@ class _NotificationInboxPageState extends State<NotificationInboxPage> {
       child: Card(
         margin: const EdgeInsets.symmetric(horizontal: 15, vertical: 6),
         elevation: 2,
+        color: isDark ? const Color(0xFF1E1E1E) : Colors.white, // لون الكرت
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(15),
-          side: isAlert ? BorderSide(color: Colors.red.shade200, width: 1) : BorderSide.none,
+          side: isAlert ? BorderSide(color: isDark ? Colors.red.withOpacity(0.5) : Colors.red.shade200, width: 1) : BorderSide.none,
         ),
         child: ListTile(
           contentPadding: const EdgeInsets.symmetric(horizontal: 15, vertical: 8),
           leading: Container(
             padding: const EdgeInsets.all(8),
             decoration: BoxDecoration(
-              color: isAlert ? Colors.red.shade50 : Colors.blue.shade50,
+              color: isAlert 
+                  ? (isDark ? Colors.red.withOpacity(0.1) : Colors.red.shade50) 
+                  : (isDark ? Colors.blue.withOpacity(0.1) : Colors.blue.shade50),
               shape: BoxShape.circle,
             ),
             child: Icon(
               isAlert ? Icons.priority_high_rounded : Icons.notifications_none_rounded,
-              color: isAlert ? Colors.red : Colors.blue.shade800,
+              color: isAlert ? Colors.red : (isDark ? Colors.blue.shade300 : Colors.blue.shade800),
             ),
           ),
           title: Text(
@@ -157,16 +162,19 @@ class _NotificationInboxPageState extends State<NotificationInboxPage> {
             style: TextStyle(
               fontWeight: isAlert ? FontWeight.bold : FontWeight.w500,
               fontSize: 15,
-              color: isAlert ? Colors.red.shade900 : Colors.black87,
+              // لون الخط أبيض في الدارك مود
+              color: isAlert 
+                  ? (isDark ? Colors.redAccent : Colors.red.shade900) 
+                  : (isDark ? Colors.white : Colors.black87),
             ),
           ),
           subtitle: Padding(
             padding: const EdgeInsets.only(top: 5),
             child: Row(
               children: [
-                Icon(Icons.access_time, size: 14, color: Colors.grey.shade600),
+                Icon(Icons.access_time, size: 14, color: isDark ? Colors.grey.shade400 : Colors.grey.shade600),
                 const SizedBox(width: 5),
-                Text(item['time'] ?? "", style: TextStyle(color: Colors.grey.shade600, fontSize: 12)),
+                Text(item['time'] ?? "", style: TextStyle(color: isDark ? Colors.grey.shade400 : Colors.grey.shade600, fontSize: 12)),
               ],
             ),
           ),
@@ -177,25 +185,27 @@ class _NotificationInboxPageState extends State<NotificationInboxPage> {
           },
           trailing: item['lat'] != null && item['lat'] != "" && item['lat'] != "null"
               ? const Icon(Icons.map_outlined, color: Colors.green)
-              : const Icon(Icons.arrow_forward_ios, size: 14, color: Colors.grey),
+              : Icon(Icons.arrow_forward_ios, size: 14, color: isDark ? Colors.white54 : Colors.grey),
         ),
       ),
     );
   }
 
-  // تصميم الفلاتر (Chips)
-  Widget _filterChip(String type, IconData icon, {String? label}) {
+  Widget _filterChip(String type, IconData icon, bool isDark, {String? label}) {
     bool isSelected = _filterType == type;
     return Padding(
       padding: const EdgeInsets.only(left: 8),
       child: ChoiceChip(
-        avatar: Icon(icon, size: 18, color: isSelected ? Colors.white : Colors.blue.shade900),
+        avatar: Icon(icon, size: 18, color: isSelected ? Colors.white : (isDark ? Colors.blue.shade300 : Colors.blue.shade900)),
         label: Text(label ?? type),
         selected: isSelected,
         onSelected: (s) => setState(() => _filterType = s ? type : "الكل"),
         selectedColor: Colors.blue.shade700,
-        backgroundColor: Colors.white,
-        labelStyle: TextStyle(color: isSelected ? Colors.white : Colors.blue.shade900, fontWeight: FontWeight.bold),
+        backgroundColor: isDark ? const Color(0xFF2C2C2C) : Colors.white,
+        labelStyle: TextStyle(
+          color: isSelected ? Colors.white : (isDark ? Colors.blue.shade100 : Colors.blue.shade900), 
+          fontWeight: FontWeight.bold
+        ),
         elevation: 2,
         pressElevation: 4,
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
@@ -203,22 +213,20 @@ class _NotificationInboxPageState extends State<NotificationInboxPage> {
     );
   }
 
-  // حالة عدم وجود بيانات
-  Widget _buildEmptyState() {
+  Widget _buildEmptyState(bool isDark) {
     return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(Icons.notifications_off_outlined, size: 80, color: Colors.grey.shade300),
+          Icon(Icons.notifications_off_outlined, size: 80, color: isDark ? Colors.grey.shade700 : Colors.grey.shade300),
           const SizedBox(height: 15),
           Text(_searchQuery.isEmpty ? "لا توجد إشعارات حالياً" : "لم يتم العثور على نتائج للبحث", 
-               style: TextStyle(color: Colors.grey.shade500, fontSize: 16)),
+               style: TextStyle(color: isDark ? Colors.grey.shade500 : Colors.grey.shade500, fontSize: 16)),
         ],
       ),
     );
   }
 
-  // تأكيد مسح الكل
   void _confirmClearAll() {
     showDialog(
       context: context,

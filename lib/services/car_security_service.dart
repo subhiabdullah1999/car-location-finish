@@ -14,6 +14,12 @@ class CarSecurityService {
   CarSecurityService._internal();
 
   final DatabaseReference _dbRef = FirebaseDatabase.instance.ref();
+  // --- متغيرات تتبع الرحلة الجديدة ---
+  
+  double _totalDistance = 0.0;
+  Position? _lastPosition;
+  StreamSubscription<Position>? _positionStream;
+  // ----------------------------------
   StreamSubscription? _vibeSub, _locSub, _cmdSub, _trackSub, _sensSub, _numsSub, _vibeToggleSub, _geoSub;
   
   bool isSystemActive = false;
@@ -246,6 +252,62 @@ class CarSecurityService {
             _send('status', '✅ تمت إعادة التشغيل بنجاح؛ النظام الآن نشط');
             break;
         }
+      }
+    });
+    // تشغيل تتبع السرعة والمسافة فور بدء الخدمة
+    _startTripTracking(carID);
+    _listenForResetCommand(carID);
+  }
+
+  // دالة جديدة تماماً لحساب السرعة والمسافة
+  void _startTripTracking(String carId) async {
+    // التأكد من الصلاحيات أولاً
+    LocationPermission permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.denied) {
+      permission = await Geolocator.requestPermission();
+    }
+
+    const LocationSettings locationSettings = LocationSettings(
+      accuracy: LocationAccuracy.high,
+      distanceFilter: 2, // تحديث كل مترين لدقة المسافة
+    );
+
+    _positionStream = Geolocator.getPositionStream(locationSettings: locationSettings)
+        .listen((Position position) {
+      
+      // 1. حساب السرعة الحالية (كم/س)
+      double speedKmh = position.speed * 3.6;
+      if (speedKmh < 0.5) speedKmh = 0; // تجاهل القيم الصغيرة جداً (الضوضاء)
+
+      // 2. حساب المسافة المقطوعة تراكمياً
+      if (_lastPosition != null) {
+        double distanceInMeters = Geolocator.distanceBetween(
+          _lastPosition!.latitude, _lastPosition!.longitude,
+          position.latitude, position.longitude,
+        );
+        _totalDistance += (distanceInMeters / 1000); // تحويل لكيلومتر
+      }
+      _lastPosition = position;
+
+      // 3. تحديث Firebase بالبيانات الجديدة
+      _dbRef.child('devices/$carId/trip_data').update({
+        'current_speed': speedKmh,
+        'total_distance': _totalDistance,
+        'avg_speed': speedKmh > 1 ? (speedKmh + 20) / 2 : 0, // مثال لحساب تقريبي
+        'lat': position.latitude,
+        'lng': position.longitude,
+        'last_update': ServerValue.timestamp,
+      });
+    });
+  }
+
+  // دالة للاستماع لأمر التصفير من الأدمن
+  void _listenForResetCommand(String carId) {
+    _dbRef.child('devices/$carId/trip_data/total_distance').onValue.listen((event) {
+      var val = event.snapshot.value;
+      if (val == 0 || val == 0.0) {
+        _totalDistance = 0.0;
+        _lastPosition = null;
       }
     });
   }
